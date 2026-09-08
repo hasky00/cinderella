@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "default_tier": "deny",
+  "require_content": true,
+  "tiers": {
+    "daily": {
+      "kinds": [1, 6, 7, 4, 1059, 30023],
+      "rate_limit": { "max_events": 50, "per_minutes": 60 }
+    },
+    "identity": {
+      "kinds": [0, 3, 10002, 10063],
+      "rate_limit": { "max_events": 3, "per_minutes": 1440 },
+      "delay_hours": 24
+    },
+    "destructive": {
+      "kinds": [5],
+      "delay_hours": 48
+    }
+  }
+}
