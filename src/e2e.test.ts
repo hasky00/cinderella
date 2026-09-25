@@ -11,10 +11,12 @@ import { schnorr }       from '@noble/curves/secp256k1.js'
 import { hexToBytes }    from '@noble/hashes/utils'
 import { BifrostNode, Lib } from '@frostr/bifrost'
 import { Policy }        from './policy.js'
-import { cinderella_middleware, nostr_event_id } from './middleware.js'
+import { nostr_event_id }  from './middleware.js'
+import { create_share_node } from './share-node.js'
 import { cinderella_sign, group_pubkey } from './request.js'
 import { encode_event_content, SESSION_TYPE } from './content.js'
 import { TestRelay }     from './test/relay.js'
+import { ensure_nonces } from './resync.js'
 
 const assert = (c : boolean, m : string) => { console.log(c ? '  ok  ' : '  FAIL', m); if (!c) process.exitCode = 1 }
 const now    = () => Math.floor(Date.now() / 1000)
@@ -28,10 +30,8 @@ const opts = { node_config: { msg_timeout: 2000, sub_timeout: 3000 } }   // refu
 const denials : string[] = []
 const cfg     = JSON.parse(readFileSync('./cinderella.config.json', 'utf8'))
 const gateway = new BifrostNode(group, shares[0], [ relay.url ], opts)
-const cindy   = new BifrostNode(group, shares[1], [ relay.url ], {
-  ...opts,
-  middleware : { sign: cinderella_middleware(new Policy(cfg), (lvl, m) => { if (lvl === 'deny') denials.push(m) }) }
-})
+const cindy   = create_share_node(group, shares[1], [ relay.url ], new Policy(cfg),
+  (lvl, m) => { if (lvl === 'deny') denials.push(m) }, opts)
 
 try {
   await gateway.connect()
@@ -65,6 +65,7 @@ try {
 
   const blind_id = nostr_event_id({ id: '', pubkey: group_pubkey(gateway), created_at: now(), kind: 1, tags: [], content: 'blind' })
   await refused('blind req.sign(id) refused', async () => {
+    await ensure_nonces(gateway)   // raw bifrost calls don't refill nonces themselves
     const r = await gateway.req.sign(blind_id)
     if (!r.ok) throw new Error(r.err)
   }, /blind/)
@@ -72,6 +73,7 @@ try {
   const shown  = { pubkey: group_pubkey(gateway), created_at: now(), kind: 1, tags: [], content: 'harmless note' }
   const hidden = nostr_event_id({ ...shown, id: '', kind: 5, tags: [[ 'e', 'ab'.repeat(32) ]] })
   await refused('content for a kind 1, sighash of a kind 5 refused', async () => {
+    await ensure_nonces(gateway)
     const r = await gateway.req.sign_batch([ [ hidden ] ], { content: encode_event_content(shown), type: SESSION_TYPE, retries: 0 })
     if (!r.ok) throw new Error(r.err)
   }, /does not match/)

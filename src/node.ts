@@ -6,10 +6,9 @@
  */
 
 import { readFileSync }   from 'node:fs'
-import { BifrostNode }    from '@frostr/bifrost'
 import { decode_group_package, decode_share_package } from '@frostr/bifrost/encoder'
 import { Policy }         from './policy.js'
-import { cinderella_middleware } from './middleware.js'
+import { create_share_node } from './share-node.js'
 import type { CinderellaConfig } from './policy.js'
 
 const env = (k : string, d? : string) => {
@@ -27,12 +26,11 @@ const relays = env('CINDERELLA_RELAYS').split(',').map((s : string) => s.trim())
 
 const log = (lvl : string, m : string) => console.log(`[${new Date().toISOString()}] ${lvl.padEnd(5)} ${m}`)
 
-const node = new BifrostNode(group, share, relays, {
-  middleware : { sign : cinderella_middleware(policy, log) }
-})
+const node = create_share_node(group, share, relays, policy, log)
 
 node.on('ready',              ()  => log('info', `cinderella share ${share.idx} online on ${relays.join(', ')}`))
 node.on('/sign/handler/req',  ()  => log('info', 'sign request received'))
-node.on('/sign/handler/rej',  (r : any) => log('deny', `rejected: ${String(r?.[0] ?? r)}`))
+// bifrost spreads its [reason, msg] tuple into separate listener arguments.
+node.on('/sign/handler/rej',  (reason : unknown) => log('deny', `rejected: ${String(reason)}`))
 
 await node.connect()
