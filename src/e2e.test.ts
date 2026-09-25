@@ -78,6 +78,15 @@ try {
     if (!r.ok) throw new Error(r.err)
   }, /does not match/)
 
+  console.log('offline peer')
+  // Share 3 is never online. With nonces from cindy in hand, signing must not
+  // wait for a ping to share 3 to time out (sub_timeout here is 3000ms).
+  await ensure_nonces(gateway)
+  const t0 = Date.now()
+  await cinderella_sign(gateway, { kind: 1, created_at: now(), tags: [], content: 'no waiting' })
+  const ms = Date.now() - t0
+  assert(ms < 1500, `signing does not wait for the offline third share (${ms}ms)`)
+
   console.log('after refusals')
   const again = await cinderella_sign(gateway, { kind: 7, created_at: now(), tags: [[ 'e', note.id ]], content: '+' })
   assert(schnorr.verify(hexToBytes(again.sig!), hexToBytes(again.id), hexToBytes(again.pubkey)), 'kind 7 still signs (nonce pools not wedged)')
