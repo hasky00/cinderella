@@ -16,7 +16,7 @@ import { create_share_node } from './share-node.js'
 import { cinderella_sign, group_pubkey } from './request.js'
 import { encode_event_content, SESSION_TYPE } from './content.js'
 import { TestRelay }     from './test/relay.js'
-import { ensure_nonces } from './resync.js'
+import { ensure_nonces, single_flight_pings } from './resync.js'
 
 const assert = (c : boolean, m : string) => { console.log(c ? '  ok  ' : '  FAIL', m); if (!c) process.exitCode = 1 }
 const now    = () => Math.floor(Date.now() / 1000)
@@ -30,6 +30,7 @@ const opts = { node_config: { msg_timeout: 2000, sub_timeout: 3000 } }   // refu
 const denials : string[] = []
 const cfg     = JSON.parse(readFileSync('./cinderella.config.json', 'utf8'))
 const gateway = new BifrostNode(group, shares[0], [ relay.url ], opts)
+single_flight_pings(gateway)
 const cindy   = create_share_node(group, shares[1], [ relay.url ], new Policy(cfg),
   (lvl, m) => { if (lvl === 'deny') denials.push(m) }, opts)
 

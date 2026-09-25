@@ -15,7 +15,7 @@ can post a few notes at worst — it cannot rewrite your profile, relay list, or
 | Any share signs any hash | Shares only sign events whose full JSON is attached and provably matches the sighash |
 | One threshold for everything | **Tiers by kind**: daily notes vs identity (kind 0/3/10002) vs destructive (kind 5) |
 | No limits | Per-tier **rate limits** (sliding window) |
-| Instant | **Delay gate** for identity/destructive kinds — queued, vetoable, then signed |
+| Instant | **Delay gate** for identity/destructive kinds — queued, then signed only when the same event is requested again after the delay |
 | Policy in one client's popup | Policy enforced **on every share node independently** |
 
 ## How it plugs in
@@ -52,7 +52,9 @@ npm run dev
 bifrost 2 keeps nonce pools in memory only and never reconciles them after a restart, so a
 restarted requester could never sign again and a restarted share node cost one timeout per stale
 nonce. `src/resync.ts` repairs both using the pool status that ping already carries, and marks the
-nonce of every refused request spent. It only ever **discards** nonces — never persist and restore
+nonce of every refused request spent. Requesters must call `single_flight_pings(node)` so two
+pings to the same peer are never in flight at once (a second one would discard the fresh batch the
+first just delivered). It only ever **discards** nonces — never persist and restore
 pool state: restoring a stale snapshot can reuse a nonce, which leaks that share.
 
 This reaches into bifrost internals, so `@frostr/bifrost` is pinned to exactly `2.0.2`.
@@ -76,6 +78,11 @@ npm run test:restart  # nonce resync after requester / share node restarts, refu
       guards `middleware.sign`. NIP-04/NIP-44 encrypt/decrypt use bifrost's ECDH, which has no policy,
       so a stolen hot share plus any one online Cinderella node can decrypt every DM. Add a
       `middleware.ecdh` policy (rate limits, and per-peer or per-requester rules) on every share node.
+- [ ] **High priority, before moving the real key — complete delay-gated events.** A share node signs a
+      delay-gated event (kind 0 profile, kind 5 delete) only when the *identical* event is requested
+      again after the delay. Clients never do that, so these kinds can't be published at all today.
+      The Gateway should keep held events and re-request them itself when they unlock, then publish
+      the signed event to the user's relays (and show pending/unlocked state in its UI).
 - [ ] Veto listener: a kind 1 from a hot share clears the delay queue on all nodes
 - [ ] Persist delay queue as a replaceable event on the coordination relay
 - [ ] Duress share

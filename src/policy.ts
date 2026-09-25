@@ -84,7 +84,7 @@ export class Policy {
         this.pending.set(event.id, at)
         return {
           ok: false, tier: name,
-          reason: `queued: kind ${event.kind} unlocks at ${new Date(at).toISOString()} (veto by posting a kind 1)`
+          reason: `queued: kind ${event.kind} unlocks at ${new Date(at).toISOString()} (sign by requesting the same event again after that)`
         }
       }
       if (now < unlock) {
@@ -109,7 +109,10 @@ export class Policy {
     return { ok: true, tier: name }
   }
 
-  /** Veto: a kind 1 from a hot signer cancels everything queued. */
+  /**
+   * Veto: clear everything queued. Not wired to anything yet: the veto
+   * listener that would call this is still on the roadmap.
+   */
   veto_all () : number {
     const n = this.pending.size
     this.pending.clear()
