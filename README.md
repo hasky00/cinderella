@@ -52,7 +52,9 @@ npm run dev
 bifrost 2 keeps nonce pools in memory only and never reconciles them after a restart, so a
 restarted requester could never sign again and a restarted share node cost one timeout per stale
 nonce. `src/resync.ts` repairs both using the pool status that ping already carries, and marks the
-nonce of every refused request spent. It only ever **discards** nonces — never persist and restore
+nonce of every refused request spent. Requesters must call `single_flight_pings(node)` so two
+pings to the same peer are never in flight at once (a second one would discard the fresh batch the
+first just delivered). It only ever **discards** nonces — never persist and restore
 pool state: restoring a stale snapshot can reuse a nonce, which leaks that share.
 
 This reaches into bifrost internals, so `@frostr/bifrost` is pinned to exactly `2.0.2`.

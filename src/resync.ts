@@ -101,6 +101,42 @@ export function spend_refused_nonce (node : BifrostNode, msg : any) : void {
 }
 
 /**
+ * Requester side: never have two pings to the same peer in flight. A second
+ * caller (the keepalive ping, another signature's ensure_nonces) waits for
+ * the first ping's answer instead of sending its own.
+ *
+ * Why: after a reset we hold none of a peer's nonces. Two pings that both say
+ * "I hold none" each make the peer discard and resend, and the second discard
+ * kills the batch the first reply delivered, so the next signature fails
+ * (seen in the gateway dry run: two pings 0.6s apart, then a failed sign).
+ * Call once, right after creating the node.
+ */
+export function single_flight_pings (node : BifrostNode) : void {
+  const base = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(node), 'req')?.get
+  if (!base) throw new Error('cinderella: bifrost BifrostNode.req is not a getter — single_flight_pings needs updating for this bifrost version')
+  const inflight = new Map<string, Promise<any>>()
+
+  Object.defineProperty(node, 'req', {
+    configurable : true,
+    get () {
+      const req  = base.call(node)
+      const ping = req.ping
+      return {
+        ...req,
+        ping : (pubkey : string) => {
+          const key = pubkey.length === 66 ? pubkey.slice(2) : pubkey
+          const existing = inflight.get(key)
+          if (existing) return existing
+          const pending : Promise<any> = ping(pubkey).finally(() => inflight.delete(key))
+          inflight.set(key, pending)
+          return pending
+        }
+      }
+    }
+  })
+}
+
+/**
  * Requester side (the Gateway). Discard every nonce we hold from `peer_idx`,
  * e.g. after a sign session with that peer failed: if the peer restarted,
  * they are all dead. The next ping then shows the peer we hold none, and
