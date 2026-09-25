@@ -253,7 +253,7 @@ npm run dev</code></pre>
       const unlock = pending.get(ev.id)
       if (unlock === undefined) {
         pending.set(ev.id, now + tier.delay_hours * 3600000)
-        return { ok: false, tier, name, wait: true, reason: `queued for ${tier.delay_hours} hours. Ask again after midnight — or veto it with a kind 1.` }
+        return { ok: false, tier, name, wait: true, reason: `queued for ${tier.delay_hours} hours. Ask again after midnight.` }
       }
       if (now < unlock) return { ok: false, tier, name, wait: true, reason: 'still locked. Patience, it turns back at midnight.' }
     }
