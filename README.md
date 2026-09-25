@@ -59,6 +59,13 @@ pool state: restoring a stale snapshot can reuse a nonce, which leaks that share
 
 This reaches into bifrost internals, so `@frostr/bifrost` is pinned to exactly `2.0.2`.
 
+## State across restarts
+
+Each node saves its rate-limit counters and held (delay-gated) events to `CINDERELLA_STATE`
+(default `./cinderella.state.json`, mode 600) after every decision that changes them, and loads
+them at startup, so a restart doesn't reset "3 per day" or restart a 24h delay. A corrupt state
+file stops the node rather than silently resetting; fix or remove it deliberately.
+
 ## Config
 
 See `cinderella.config.json`. Unknown kinds hit `default_tier: "deny"`.
