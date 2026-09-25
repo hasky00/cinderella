@@ -28,6 +28,15 @@ assert(!sq.ok && sq.reason.startsWith('queued'), 'kind 0 still queued (delay gat
 const sd = sp.evaluate({ ...ev(5), id: 's7' })
 assert(!sd.ok && sd.reason.startsWith('queued'), 'kind 5 still queued (delay gate kept)')
 
+console.log('relay auth tier (kind 22242)')
+const ap = new Policy(cfg)
+let signed = 0
+for (let i = 0; i < 60; i++) if (ap.evaluate({ ...ev(22242), id: 'a' + i }).ok) signed++
+assert(signed === 60,                                  '60 relay AUTH signatures in an hour, no delay')
+assert(!ap.evaluate({ ...ev(22242), id: 'a60' }).ok,   '61st in the hour denied')
+assert(ap.evaluate({ ...ev(22242), id: 'a61' }, Date.now() + 61 * 60_000).ok, 'allowed again after an hour')
+assert(ap.evaluate(ev(1)).ok,                          'relay AUTH limit does not touch notes')
+
 console.log('rate limit')
 const q = new Policy({ ...cfg, tiers: { t: { kinds: [1], rate_limit: { max_events: 2, per_minutes: 1 } } } })
 q.evaluate(ev(1)); q.evaluate(ev(1))
