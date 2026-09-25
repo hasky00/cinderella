@@ -8,13 +8,15 @@
  * needs the others.
  *
  * Key rule: a bare hash is never signed. The requester MUST attach the
- * full event JSON as `session.content`, and we prove it matches the
- * sighash before looking at the kind. No content → no signature.
+ * full event as `session.content` (hex-encoded JSON, see content.ts), and
+ * we prove it matches the sighash before looking at the kind.
+ * No content → no signature.
  */
 
 import { sha256 }     from '@noble/hashes/sha256'
 import { bytesToHex } from '@noble/hashes/utils'
 import { Policy }     from './policy.js'
+import { decode_event_content } from './content.js'
 import type { NostrEvent } from './policy.js'
 
 /** NIP-01 event id: sha256 of the canonical serialization. */
@@ -45,9 +47,10 @@ export function cinderella_middleware (policy : Policy, log : MiddlewareLogger =
 
     let ev : NostrEvent
     try {
-      ev = JSON.parse(content)
+      ev = decode_event_content(content)
     } catch {
-      throw new Error('cinderella: content is not valid event JSON')
+      log('deny', 'content is not hex-encoded event JSON — refused')
+      throw new Error('cinderella: content is not hex-encoded event JSON')
     }
 
     // Prove the content is what we are actually being asked to sign.

@@ -24,10 +24,20 @@ bifrost exposes `middleware.sign(node, msg)`, called on each signer before it pr
 signature. Cinderella's middleware:
 
 1. Refuses blind requests (`content === null`).
-2. Parses `content` as a Nostr event, recomputes the NIP-01 id, and requires it to equal the requested sighash.
+2. Decodes `content` as a Nostr event, recomputes the NIP-01 id, and requires it to equal the requested sighash.
 3. Looks up the tier for `event.kind`, applies rate limit + delay gate, allows or throws.
 
-Requesters must send `content: JSON.stringify(event)` — see `sign_batch_request_api` options in bifrost.
+Requesters must attach the event as **hex-encoded JSON** — bifrost hashes `content` into the session
+id with `Buff.bytes()`, which only accepts hex, so raw JSON throws before the request is sent.
+Use the helper instead of `node.req.sign(id)` (which goes through the batcher and never sends content):
+
+```ts
+import { cinderella_sign } from './src/request.js'
+const signed = await cinderella_sign(node, { kind: 1, created_at, tags: [], content: 'gm' })
+```
+
+A share that refuses stays silent (bifrost sends no reject message), so a denied request
+shows up on the requester as a timeout (`sub_timeout`, 30s by default).
 
 ## Run a share node
 
@@ -44,7 +54,8 @@ See `cinderella.config.json`. Unknown kinds hit `default_tier: "deny"`.
 ## Test
 
 ```bash
-npm test
+npm test            # unit + e2e
+npm run test:e2e    # throwaway 2-of-3 group, real bifrost nodes, in-process relay
 ```
 
 ## Roadmap

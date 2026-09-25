@@ -7,16 +7,22 @@
   "scripts": {
     "build": "tsc",
     "dev": "tsx src/node.ts",
-    "test": "tsx src/policy.test.ts"
+    "test": "tsx src/policy.test.ts && tsx src/e2e.test.ts",
+    "test:unit": "tsx src/policy.test.ts",
+    "test:e2e": "tsx src/e2e.test.ts",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@frostr/bifrost": "^2.0.2",
     "@noble/hashes": "^1.4.0"
   },
   "devDependencies": {
+    "@noble/curves": "^2.4.0",
     "@types/node": "^26.5.0",
+    "@types/ws": "^8.18.1",
     "tsx": "^4.19.0",
-    "typescript": "^5.6.0"
+    "typescript": "^5.6.0",
+    "ws": "^8.21.3"
   },
   "license": "MIT"
 }
