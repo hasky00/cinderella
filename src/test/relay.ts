@@ -52,7 +52,9 @@ export class TestRelay {
     switch (msg[0]) {
       case 'EVENT': {
         const ev = msg[1] as Event
-        this.events.push(ev)
+        // NIP-01: ephemeral kinds (20000-29999) are forwarded but never stored.
+        // bifrost RPC uses kind 20000, so replaying them would be wrong.
+        if (ev.kind < 20000 || ev.kind >= 30000) this.events.push(ev)
         send([ 'OK', ev.id, true, '' ])
         for (const [ client, subs ] of this.subs) {
           for (const [ sid, filters ] of subs) {

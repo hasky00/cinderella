@@ -47,6 +47,16 @@ npm install
 npm run dev
 ```
 
+## Nonces and restarts
+
+bifrost 2 keeps nonce pools in memory only and never reconciles them after a restart, so a
+restarted requester could never sign again and a restarted share node cost one timeout per stale
+nonce. `src/resync.ts` repairs both using the pool status that ping already carries, and marks the
+nonce of every refused request spent. It only ever **discards** nonces — never persist and restore
+pool state: restoring a stale snapshot can reuse a nonce, which leaks that share.
+
+This reaches into bifrost internals, so `@frostr/bifrost` is pinned to exactly `2.0.2`.
+
 ## Config
 
 See `cinderella.config.json`. Unknown kinds hit `default_tier: "deny"`.
@@ -56,6 +66,7 @@ See `cinderella.config.json`. Unknown kinds hit `default_tier: "deny"`.
 ```bash
 npm test            # unit + e2e
 npm run test:e2e    # throwaway 2-of-3 group, real bifrost nodes, in-process relay
+npm run test:restart  # nonce resync after requester / share node restarts, refusal nonce spend
 ```
 
 ## Roadmap

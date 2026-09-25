@@ -7,13 +7,14 @@
   "scripts": {
     "build": "tsc",
     "dev": "tsx src/node.ts",
-    "test": "tsx src/policy.test.ts && tsx src/e2e.test.ts",
+    "test": "tsx src/policy.test.ts && tsx src/e2e.test.ts && tsx src/restart.test.ts",
     "test:unit": "tsx src/policy.test.ts",
     "test:e2e": "tsx src/e2e.test.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test:restart": "tsx src/restart.test.ts"
   },
   "dependencies": {
-    "@frostr/bifrost": "^2.0.2",
+    "@frostr/bifrost": "2.0.2",
     "@noble/hashes": "^1.4.0"
   },
   "devDependencies": {

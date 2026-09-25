@@ -17,6 +17,7 @@ import { sha256 }     from '@noble/hashes/sha256'
 import { bytesToHex } from '@noble/hashes/utils'
 import { Policy }     from './policy.js'
 import { decode_event_content } from './content.js'
+import { spend_refused_nonce }  from './resync.js'
 import type { NostrEvent } from './policy.js'
 
 /** NIP-01 event id: sha256 of the canonical serialization. */
@@ -35,7 +36,20 @@ export interface MiddlewareLogger {
  * as the sign session package (content, type, hashes, ...).
  */
 export function cinderella_middleware (policy : Policy, log : MiddlewareLogger = () => {}) {
-  return (_node : unknown, msg : any) => {
+  const check = cinderella_check(policy, log)
+  return (node : unknown, msg : any) => {
+    try {
+      return check(msg)
+    } catch (err) {
+      // The requester already consumed its copy of our nonce; spend ours too.
+      if (node) spend_refused_nonce(node as any, msg)
+      throw err
+    }
+  }
+}
+
+function cinderella_check (policy : Policy, log : MiddlewareLogger) {
+  return (msg : any) => {
     const session = msg?.data ?? {}
     const hashes  : string[][] = session.hashes ?? []
     const content : string | null = session.content ?? null
