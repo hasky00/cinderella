@@ -61,6 +61,10 @@ npm run test:e2e    # throwaway 2-of-3 group, real bifrost nodes, in-process rel
 ## Roadmap
 
 - [ ] Gateway: NIP-46 signer (fork of igloo-server) that attaches event content to every request
+- [ ] **High priority, next after the Gateway — ECDH policy (DM decryption gap).** Cinderella only
+      guards `middleware.sign`. NIP-04/NIP-44 encrypt/decrypt use bifrost's ECDH, which has no policy,
+      so a stolen hot share plus any one online Cinderella node can decrypt every DM. Add a
+      `middleware.ecdh` policy (rate limits, and per-peer or per-requester rules) on every share node.
 - [ ] Veto listener: a kind 1 from a hot share clears the delay queue on all nodes
 - [ ] Persist delay queue as a replaceable event on the coordination relay
 - [ ] Duress share
