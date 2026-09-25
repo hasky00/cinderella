@@ -31,9 +31,9 @@ assert(!sd.ok && sd.reason.startsWith('queued'), 'kind 5 still queued (delay gat
 console.log('relay auth tier (kind 22242)')
 const ap = new Policy(cfg)
 let signed = 0
-for (let i = 0; i < 60; i++) if (ap.evaluate({ ...ev(22242), id: 'a' + i }).ok) signed++
-assert(signed === 60,                                  '60 relay AUTH signatures in an hour, no delay')
-assert(!ap.evaluate({ ...ev(22242), id: 'a60' }).ok,   '61st in the hour denied')
+for (let i = 0; i < 200; i++) if (ap.evaluate({ ...ev(22242), id: 'a' + i }).ok) signed++
+assert(signed === 200,                                 '200 relay AUTH signatures in an hour, no delay')
+assert(!ap.evaluate({ ...ev(22242), id: 'a200' }).ok,  '201st in the hour denied')
 assert(ap.evaluate({ ...ev(22242), id: 'a61' }, Date.now() + 61 * 60_000).ok, 'allowed again after an hour')
 assert(ap.evaluate(ev(1)).ok,                          'relay AUTH limit does not touch notes')
 

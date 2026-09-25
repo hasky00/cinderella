@@ -9,7 +9,7 @@
     },
     "relay_auth": {
       "kinds": [22242],
-      "rate_limit": { "max_events": 60, "per_minutes": 60 }
+      "rate_limit": { "max_events": 200, "per_minutes": 60 }
     },
     "social": {
       "kinds": [3, 10002],
