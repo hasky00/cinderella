@@ -15,7 +15,7 @@ can post a few notes at worst — it cannot rewrite your profile, relay list, or
 | Any share signs any hash | Shares only sign events whose full JSON is attached and provably matches the sighash |
 | One threshold for everything | **Tiers by kind**: daily notes vs identity (kind 0/3/10002) vs destructive (kind 5) |
 | No limits | Per-tier **rate limits** (sliding window) |
-| Instant | **Delay gate** for identity/destructive kinds — queued, vetoable, then signed |
+| Instant | **Delay gate** for identity/destructive kinds — queued, then signed only when the same event is requested again after the delay |
 | Policy in one client's popup | Policy enforced **on every share node independently** |
 
 ## How it plugs in
