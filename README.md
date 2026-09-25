@@ -57,6 +57,19 @@ pool state: restoring a stale snapshot can reuse a nonce, which leaks that share
 
 This reaches into bifrost internals, so `@frostr/bifrost` is pinned to exactly `2.0.2`.
 
+## Limits are per node
+
+Every share node enforces the policy **on its own**, counting only the requests it sees. The
+Gateway needs just one share node per signature (2-of-3: its own share plus one node) and picks
+among the nodes that can sign, so with two share nodes a stolen Gateway share can spread its
+requests over both: "3 per day" per node becomes **up to 6 per day** in total.
+
+Until nodes share their counters (see the roadmap), set each node's limits to
+**your intended total ÷ the number of share nodes that can answer**, rounded down. For example,
+with two nodes and a target of 3 follow-list changes a day, use `"max_events": 1` on each node
+(2 per day in total), or accept 6. Delay gates are not affected: every node holds a
+delay-gated event for the full delay on its own.
+
 ## Config
 
 See `cinderella.config.json`. Unknown kinds hit `default_tier: "deny"`.
@@ -77,7 +90,9 @@ npm run test:restart  # nonce resync after requester / share node restarts, refu
       so a stolen hot share plus any one online Cinderella node can decrypt every DM. Add a
       `middleware.ecdh` policy (rate limits, and per-peer or per-requester rules) on every share node.
 - [ ] Veto listener: a kind 1 from a hot share clears the delay queue on all nodes
-- [ ] Persist delay queue as a replaceable event on the coordination relay
+- [ ] Share policy state across share nodes (rate-limit counters and the delay queue), e.g. as a
+      replaceable event on the coordination relay, so limits hold for the whole group rather than
+      per node (today: per node, see "Limits are per node")
 - [ ] Duress share
 - [ ] Automatic proactive resharing
 
