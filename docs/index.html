@@ -186,7 +186,7 @@
 
   <section id="slipper">
     <h2>Try the slipper<small>the real policy, running in your browser</small></h2>
-    <p>Pick an event kind and see what the shares say. Same rules as <code>cinderella.config.json</code>: unknown kinds are denied, identity kinds queue for 24 hours, deletions for 48.</p>
+    <p>Pick an event kind and see what the shares say. Same rules as <code>cinderella.config.json</code>: unknown kinds are denied, follow-list and relay-list changes are capped at 3 a day, profile changes queue for 24 hours, deletions for 48.</p>
     <div class="demo">
       <label for="kind">What is being signed?</label>
       <select id="kind">
@@ -240,7 +240,8 @@ npm run dev</code></pre>
     default_tier: 'deny',
     tiers: {
       daily:       { kinds: [1, 6, 7, 4, 1059, 30023], rate_limit: { max_events: 50, per_minutes: 60 } },
-      identity:    { kinds: [0, 3, 10002, 10063],      rate_limit: { max_events: 3,  per_minutes: 1440 }, delay_hours: 24 },
+      social:      { kinds: [3, 10002],                rate_limit: { max_events: 3,  per_minutes: 1440 } },
+      identity:    { kinds: [0, 10063],                rate_limit: { max_events: 3,  per_minutes: 1440 }, delay_hours: 24 },
       destructive: { kinds: [5],                        delay_hours: 48 }
     }
   }
