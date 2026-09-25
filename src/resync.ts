@@ -111,20 +111,36 @@ export function discard_incoming (node : BifrostNode, peer_idx : number) : numbe
 }
 
 /**
- * Requester side: ping every peer we may send to but cannot currently sign
- * with, so their replies refill our pool. Returns how many peers are
- * signable afterwards.
+ * Requester side: make sure enough peers (threshold - 1) can sign with us.
+ * If they already can, return at once. Otherwise ping every peer we lack
+ * nonces from, and return as soon as enough are signable — never wait on a
+ * peer that is offline (its ping would only end at sub_timeout). Returns how
+ * many peers are signable.
  */
 export async function ensure_nonces (node : BifrostNode) : Promise<number> {
-  const peers = node.peers.filter(p => p.policy.send)
-  await Promise.allSettled(peers.map(async p => {
-    const idx = member_idx(node, p.pubkey)
-    if (idx !== undefined && !node.pool.can_sign(idx)) await node.req.ping(p.pubkey)
-  }))
-  return peers.filter(p => {
-    const idx = member_idx(node, p.pubkey)
-    return idx !== undefined && node.pool.can_sign(idx)
-  }).length
+  const needed = node.group.threshold - 1
+  const peers  = node.peers
+    .filter(p => p.policy.send)
+    .map(p => ({ pubkey : p.pubkey, idx : member_idx(node, p.pubkey) }))
+    .filter((p) : p is { pubkey : string, idx : number } => p.idx !== undefined)
+  const signable = () => peers.filter(p => node.pool.can_sign(p.idx)).length
+
+  if (signable() >= needed) return signable()
+
+  const lacking = peers.filter(p => !node.pool.can_sign(p.idx))
+  await new Promise<void>(resolve => {
+    let pending = lacking.length
+    if (pending === 0) return resolve()
+    for (const p of lacking) {
+      node.req.ping(p.pubkey)
+        .catch(() => undefined)
+        .finally(() => {
+          pending -= 1
+          if (pending === 0 || signable() >= needed) resolve()
+        })
+    }
+  })
+  return signable()
 }
 
 /** Map peer pubkeys to member indexes (for discard_incoming after a failed session). */
