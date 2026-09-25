@@ -6,14 +6,15 @@
 
 FROSTR splits your nsec into k-of-n shares. Cinderella makes every share **opinionated**:
 each node inspects the event before contributing its partial signature. A stolen device
-can post a few notes at worst — it cannot rewrite your profile, relay list, or delete your history.
+can post a few notes at worst — it cannot quietly rewrite your profile or delete your history, and
+follow-list / relay-list changes are capped at 3 per day.
 
 ## What it adds on top of FROSTR
 
 | FROSTR today | Cinderella |
 |---|---|
 | Any share signs any hash | Shares only sign events whose full JSON is attached and provably matches the sighash |
-| One threshold for everything | **Tiers by kind**: daily notes vs identity (kind 0/3/10002) vs destructive (kind 5) |
+| One threshold for everything | **Tiers by kind**: daily notes vs social graph (kind 3/10002) vs identity (kind 0) vs destructive (kind 5) |
 | No limits | Per-tier **rate limits** (sliding window) |
 | Instant | **Delay gate** for identity/destructive kinds — queued, vetoable, then signed |
 | Policy in one client's popup | Policy enforced **on every share node independently** |

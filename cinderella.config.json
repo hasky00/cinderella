@@ -7,8 +7,16 @@
       "kinds": [1, 6, 7, 4, 1059, 30023],
       "rate_limit": { "max_events": 50, "per_minutes": 60 }
     },
+    "relay_auth": {
+      "kinds": [22242],
+      "rate_limit": { "max_events": 200, "per_minutes": 60 }
+    },
+    "social": {
+      "kinds": [3, 10002],
+      "rate_limit": { "max_events": 3, "per_minutes": 1440 }
+    },
     "identity": {
-      "kinds": [0, 3, 10002, 10063],
+      "kinds": [0, 10063],
       "rate_limit": { "max_events": 3, "per_minutes": 1440 },
       "delay_hours": 24
     },
