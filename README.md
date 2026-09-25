@@ -76,6 +76,11 @@ npm run test:restart  # nonce resync after requester / share node restarts, refu
       guards `middleware.sign`. NIP-04/NIP-44 encrypt/decrypt use bifrost's ECDH, which has no policy,
       so a stolen hot share plus any one online Cinderella node can decrypt every DM. Add a
       `middleware.ecdh` policy (rate limits, and per-peer or per-requester rules) on every share node.
+- [ ] **High priority, before moving the real key — complete delay-gated events.** A share node signs a
+      delay-gated event (kind 0 profile, kind 5 delete) only when the *identical* event is requested
+      again after the delay. Clients never do that, so these kinds can't be published at all today.
+      The Gateway should keep held events and re-request them itself when they unlock, then publish
+      the signed event to the user's relays (and show pending/unlocked state in its UI).
 - [ ] Veto listener: a kind 1 from a hot share clears the delay queue on all nodes
 - [ ] Persist delay queue as a replaceable event on the coordination relay
 - [ ] Duress share
