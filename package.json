@@ -6,7 +6,7 @@
   "main": "dist/index.js",
   "scripts": {
     "build": "tsc",
-    "dev": "tsx src/node.ts",
+    "dev": "tsx --env-file=.env src/node.ts",
     "test": "tsx src/policy.test.ts && tsx src/e2e.test.ts && tsx src/restart.test.ts",
     "test:unit": "tsx src/policy.test.ts",
     "test:e2e": "tsx src/e2e.test.ts",
