@@ -151,12 +151,14 @@ export function discard_incoming (node : BifrostNode, peer_idx : number) : numbe
  * If they already can, return at once. Otherwise ping every peer we lack
  * nonces from, and return as soon as enough are signable — never wait on a
  * peer that is offline (its ping would only end at sub_timeout). Returns how
- * many peers are signable.
+ * many peers are signable. With `only`, just those peers count.
  */
-export async function ensure_nonces (node : BifrostNode) : Promise<number> {
-  const needed = node.group.threshold - 1
+export async function ensure_nonces (node : BifrostNode, only? : string[]) : Promise<number> {
+  const needed = only ? Math.min(node.group.threshold - 1, only.length) : node.group.threshold - 1
+  const wanted = only?.map(pk => pk.length === 66 ? pk.slice(2) : pk)
   const peers  = node.peers
     .filter(p => p.policy.send)
+    .filter(p => !wanted || wanted.includes(p.pubkey.length === 66 ? p.pubkey.slice(2) : p.pubkey))
     .map(p => ({ pubkey : p.pubkey, idx : member_idx(node, p.pubkey) }))
     .filter((p) : p is { pubkey : string, idx : number } => p.idx !== undefined)
   const signable = () => peers.filter(p => node.pool.can_sign(p.idx)).length

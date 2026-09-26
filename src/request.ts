@@ -29,11 +29,19 @@ export function group_pubkey (node : BifrostNode) : string {
   return pk.length === 66 ? pk.slice(2) : pk
 }
 
-export async function cinderella_sign (node : BifrostNode, tmpl : EventTemplate) : Promise<NostrEvent> {
+export interface SignOptions {
+  /**
+   * Only use these peers (x-only or compressed pubkeys). The gateway uses this
+   * to show a delay-gated event to every share node, so each starts its clock.
+   */
+  peers? : string[]
+}
+
+export async function cinderella_sign (node : BifrostNode, tmpl : EventTemplate, options : SignOptions = {}) : Promise<NostrEvent> {
   const ev : NostrEvent = { ...tmpl, pubkey: group_pubkey(node), id: '' }
   ev.id = nostr_event_id(ev)
 
-  await ensure_nonces(node)
+  await ensure_nonces(node, options.peers)
 
   // Remember which members were in our session, so a failure only resets those peers.
   let members : number[] = []
@@ -51,7 +59,8 @@ export async function cinderella_sign (node : BifrostNode, tmpl : EventTemplate)
     res = await node.req.sign_batch([ [ ev.id ] ], {
       content : encode_event_content(ev),
       type    : SESSION_TYPE,
-      retries : 0            // a retry would count twice against rate limits
+      retries : 0,           // a retry would count twice against rate limits
+      ...(options.peers ? { peers: options.peers.map(pk => pk.length === 66 ? pk.slice(2) : pk) } : {})
     })
   } finally {
     node.off('/sign/sender/rej', on_rej)

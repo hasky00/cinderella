@@ -16,6 +16,16 @@ const d = p.evaluate({ ...ev(0), id: 'x' })
 assert(!d.ok && d.reason.startsWith('queued'), 'kind 0 queued (delay gate)')
 assert(p.evaluate({ ...ev(0), id: 'x' }, Date.now() + 25 * 3_600_000).ok, 'kind 0 allowed after 24h')
 
+console.log('short delay gate (tests use seconds)')
+{
+  const fp = new Policy({ version: 1, default_tier: 'deny', require_content: true, tiers: { held: { kinds: [0], delay_hours: 0.001 } } })
+  const t = Date.now()
+  const q = fp.evaluate({ ...ev(0), id: 'h1' }, t)
+  assert(!q.ok && q.reason.startsWith('queued'),     'fractional delay_hours queues (0.001h = 3.6s)')
+  assert(!fp.evaluate({ ...ev(0), id: 'h1' }, t + 2_000).ok, 'still held after 2s')
+  assert(fp.evaluate({ ...ev(0), id: 'h1' }, t + 4_000).ok,  'signed after 4s')
+}
+
 console.log('rate limit')
 const q = new Policy({ ...cfg, tiers: { t: { kinds: [1], rate_limit: { max_events: 2, per_minutes: 1 } } } })
 q.evaluate(ev(1)); q.evaluate(ev(1))

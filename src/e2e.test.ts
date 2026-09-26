@@ -88,6 +88,14 @@ try {
   const ms = Date.now() - t0
   assert(ms < 1500, `signing does not wait for the offline third share (${ms}ms)`)
 
+  console.log('targeted peers')
+  const aimed = await cinderella_sign(gateway, { kind: 1, created_at: now(), tags: [], content: 'aimed at cindy' }, { peers: [ cindy.pubkey ] })
+  assert(schnorr.verify(hexToBytes(aimed.sig!), hexToBytes(aimed.id), hexToBytes(aimed.pubkey)), 'signs with an explicitly chosen peer')
+  const offline_pk = group.members.find((m : { idx : number, pubkey : string }) => m.idx === shares[2].idx)!.pubkey
+  let aimed_failed = false
+  try { await cinderella_sign(gateway, { kind: 1, created_at: now(), tags: [], content: 'aimed at offline' }, { peers: [ offline_pk ] }) } catch { aimed_failed = true }
+  assert(aimed_failed, 'aimed only at an offline peer: fails instead of using another peer')
+
   console.log('after refusals')
   const again = await cinderella_sign(gateway, { kind: 7, created_at: now(), tags: [[ 'e', note.id ]], content: '+' })
   assert(schnorr.verify(hexToBytes(again.sig!), hexToBytes(again.id), hexToBytes(again.pubkey)), 'kind 7 still signs (nonce pools not wedged)')
