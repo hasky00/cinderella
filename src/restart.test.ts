@@ -5,7 +5,9 @@
  *  A) after the requester restarts, it can never sign again;
  *  B) after a share node restarts, the requester burns its stale nonces
  *     one timeout at a time;
- *  C) every refusal leaks one of the share node's outgoing nonces.
+ *  C) every refusal leaks one of the share node's outgoing nonces;
+ *  D) two pings in flight at once make the share node discard the fresh
+ *     batch its first reply just delivered.
  */
 
 import { readFileSync }  from 'node:fs'
@@ -13,7 +15,7 @@ import { BifrostNode, Lib } from '@frostr/bifrost'
 import { Policy }        from './policy.js'
 import { create_share_node } from './share-node.js'
 import { cinderella_sign } from './request.js'
-import { close_node }    from './resync.js'
+import { close_node, discard_incoming, single_flight_pings } from './resync.js'
 import { TestRelay }     from './test/relay.js'
 
 const assert = (c : boolean, m : string) => { console.log(c ? '  ok  ' : '  FAIL', m); if (!c) process.exitCode = 1 }
@@ -26,7 +28,7 @@ await relay.start()
 const { group, shares } = Lib.generate_dealer_package(2, 3)
 const opts   = { node_config: { msg_timeout: 2000, sub_timeout: 2000 } }
 const cfg    = JSON.parse(readFileSync('./cinderella.config.json', 'utf8'))
-const mk_gw    = () => new BifrostNode(group, shares[0], [ relay.url ], opts)
+const mk_gw    = () => { const n = new BifrostNode(group, shares[0], [ relay.url ], opts); single_flight_pings(n); return n }
 const mk_cindy = () => create_share_node(group, shares[1], [ relay.url ], new Policy(cfg), () => {}, opts)
 
 let gw    = mk_gw()
@@ -64,6 +66,13 @@ try {
   assert(after === before - 1, `one refusal spends one of the share node's nonces (${before} -> ${after})`)
   for (let i = 0; i < 2; i++) await signs(gw, 1984)
   assert(await signs(gw), 'kind 1 still signs after repeated refusals')
+
+  console.log('D) two pings at once after the requester dropped its nonces')
+  // As in the dry run: the keepalive ping and a signature's ensure_nonces
+  // both ask while the requester holds none.
+  discard_incoming(gw, shares[1].idx)
+  await Promise.all([ gw.req.ping(cindy.pubkey), gw.req.ping(cindy.pubkey) ])
+  assert(await signs(gw), 'first signature after the double ping succeeds')
 } catch (err) {
   console.log('  FAIL', 'unexpected error:', err)
   process.exitCode = 1

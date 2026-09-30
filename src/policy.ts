@@ -38,13 +38,64 @@ export type Verdict =
   | { ok : true,  tier : string }
   | { ok : false, tier : string | null, reason : string }
 
-export class Policy {
-  private readonly cfg     : CinderellaConfig
-  private readonly history = new Map<string, number[]>()   // tier -> timestamps (ms)
-  private readonly pending = new Map<string, number>()     // event id -> unlock time (ms)
+/** Everything a node must remember across restarts (see state.ts). */
+export interface PolicyState {
+  version : 1
+  history : Record<string, number[]>   // tier -> timestamps (ms)
+  pending : Record<string, number>     // event id -> unlock time (ms)
+}
 
-  constructor (cfg : CinderellaConfig) {
-    this.cfg = cfg
+export interface PolicyOptions {
+  /** State saved by a previous run, so restarts don't reset limits or held events. */
+  state?     : PolicyState
+  /** Called after every decision that changed the state, with the state to save. */
+  on_change? : (state : PolicyState) => void
+}
+
+/** Held events are forgotten this long after they unlocked without being re-requested. */
+const PENDING_RETENTION_MS = 7 * 24 * 3_600_000
+
+export class Policy {
+  private readonly cfg       : CinderellaConfig
+  private readonly history   = new Map<string, number[]>()   // tier -> timestamps (ms)
+  private readonly pending   = new Map<string, number>()     // event id -> unlock time (ms)
+  private readonly on_change : ((state : PolicyState) => void) | undefined
+
+  constructor (cfg : CinderellaConfig, options : PolicyOptions = {}) {
+    this.cfg       = cfg
+    this.on_change = options.on_change
+    if (options.state) this.load(options.state)
+  }
+
+  /** The state to persist, without entries that can no longer matter. */
+  export_state (now = Date.now()) : PolicyState {
+    const history : Record<string, number[]> = {}
+    for (const [ name, stamps ] of this.history) {
+      const limit = this.cfg.tiers[name]?.rate_limit
+      if (!limit) continue
+      const window = limit.per_minutes * 60_000
+      const live   = stamps.filter(t => now - t < window)
+      if (live.length) history[name] = live
+    }
+    const pending : Record<string, number> = {}
+    for (const [ id, unlock ] of this.pending) {
+      if (now - unlock < PENDING_RETENTION_MS) pending[id] = unlock
+    }
+    return { version: 1, history, pending }
+  }
+
+  private load (state : PolicyState) : void {
+    if (state.version !== 1) throw new Error(`policy state: unsupported version ${String(state.version)}`)
+    for (const [ name, stamps ] of Object.entries(state.history ?? {})) {
+      if (Array.isArray(stamps)) this.history.set(name, stamps.filter(t => typeof t === 'number'))
+    }
+    for (const [ id, unlock ] of Object.entries(state.pending ?? {})) {
+      if (typeof unlock === 'number') this.pending.set(id, unlock)
+    }
+  }
+
+  private changed (now : number) : void {
+    this.on_change?.(this.export_state(now))
   }
 
   /** Find the tier whose kinds list contains this kind. */
@@ -82,6 +133,7 @@ export class Policy {
       if (unlock === undefined) {
         const at = now + tier.delay_hours * 3_600_000
         this.pending.set(event.id, at)
+        this.changed(now)
         return {
           ok: false, tier: name,
           reason: `queued: kind ${event.kind} unlocks at ${new Date(at).toISOString()} (veto by posting a kind 1)`
@@ -106,6 +158,7 @@ export class Policy {
     }
 
     this.pending.delete(event.id)
+    this.changed(now)
     return { ok: true, tier: name }
   }
 
@@ -113,6 +166,7 @@ export class Policy {
   veto_all () : number {
     const n = this.pending.size
     this.pending.clear()
+    if (n) this.changed(Date.now())
     return n
   }
 }
