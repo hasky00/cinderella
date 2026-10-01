@@ -4,3 +4,4 @@ dist
 *.share
 *.state.json
 *.state.json.tmp
+*.alert.key

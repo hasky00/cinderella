@@ -89,3 +89,80 @@ console.log('state across restarts')
   const later = run3.export_state(t0 + 1441 * 60_000)
   assert(Object.keys(later.history).length === 0,                              'expired counters are not saved')
 }
+
+console.log('veto: policy')
+{
+  const vcfg = { version: 1, default_tier: 'deny', require_content: true, tiers: {
+    held  : { kinds: [0], delay_hours: 1 },
+    daily : { kinds: [1] }
+  } }
+  const t0 = Date.now()
+  const alerts : string[] = []
+  let ready = true
+  const vp = new Policy(vcfg, { alerts_required: true, on_hold: id => alerts.push(id), ready: () => ready })
+  const e = (id : string) => ({ ...ev(0), id })
+
+  const first = vp.evaluate(e('p1'), t0)
+  assert(!first.ok && first.reason.includes('starts when the veto alert is delivered'), 'held; delay waits for the alert')
+  assert(alerts[0] === 'p1',                                         'on_hold fires once for the alert')
+  assert(!vp.evaluate(e('p1'), t0 + 2 * 3_600_000).ok,               'alert never delivered: still refused after the delay (fail-closed)')
+  assert(vp.alert_delivered('p1', t0 + 10),                          'alert delivered starts the delay')
+  assert(!vp.evaluate(e('p1'), t0 + 30 * 60_000).ok,                 'still held 30 min after delivery')
+  ready = false
+  const notReady = vp.evaluate(e('p1'), t0 + 3_600_000 + 20)
+  assert(!notReady.ok && notReady.reason.includes('catching up'),    'unlocked but veto feed not caught up: refused')
+  ready = true
+  assert(vp.evaluate(e('p1'), t0 + 3_600_000 + 20).ok,               'unlocked and caught up: signed')
+  assert(vp.veto('p1', t0 + 3_600_000 + 30) === 'already_signed',    'veto for an already-signed event is ignored')
+
+  vp.evaluate(e('p2'), t0)
+  vp.alert_delivered('p2', t0)
+  assert(vp.veto('nope', t0) === 'unknown',                          'veto for an unknown id is ignored')
+  assert(vp.veto('p2', t0 - 5 * 60_000) === 'older_than_hold',       'veto written before the hold is ignored (no replay)')
+  assert(vp.veto('p2', t0 + 1_000) === 'vetoed',                     'veto for the exact held id works')
+  assert(vp.veto('p2', t0 + 2_000) === 'already_vetoed',             'second veto: already vetoed')
+  const after = vp.evaluate(e('p2'), t0 + 2 * 3_600_000)
+  assert(!after.ok && after.reason.startsWith('vetoed'),             'vetoed event refused even after its unlock')
+  const again = vp.evaluate(e('p2'), t0 + 3 * 3_600_000)
+  assert(!again.ok && again.reason.startsWith('vetoed'),             'and stays refused (not held again)')
+
+  const saved = vp.export_state(t0 + 4_000)
+  const vp2   = new Policy(vcfg, { state: saved, alerts_required: true })
+  assert(!vp2.evaluate(e('p2'), t0 + 5 * 3_600_000).ok,              'veto survives a restart')
+  assert(vp2.veto('p1', t0 + 6_000) === 'already_signed',            'signed list survives a restart')
+
+  const v1 = new Policy(vcfg, { state: { version: 1, history: {}, pending: { old: t0 + 1000 } } as any })
+  assert(v1.evaluate(e('old'), t0 + 2000).ok,                        'version 1 state still loads (held event unlocks as before)')
+}
+
+console.log('veto: commands, config, verified unwrap')
+{
+  const { parse_veto_command, resolve_veto_config, unwrap_verified } = await import('./veto.js')
+  const { generateSecretKey, getPublicKey, nip17, nip19, nip44, finalizeEvent, getEventHash } = await import('nostr-tools')
+  const id = 'ab'.repeat(32)
+  assert(parse_veto_command(`veto ${id}`) === id,                     'veto <64 hex> parses')
+  assert(parse_veto_command(`  VETO ${id.toUpperCase()} `) === id,     'case and spaces tolerated')
+  assert(parse_veto_command(`veto ${id.slice(0, 8)}`) === null,        'a short prefix is refused (exact id only)')
+  assert(parse_veto_command('veto all') === null,                     '"veto all" is refused')
+
+  const phone = generateSecretKey(), node = generateSecretKey(), thief = generateSecretKey()
+  const two = [ 'wss://hasky.chat', 'wss://nos.lol' ]
+  let threw = ''
+  try { resolve_veto_config({ pubkey: nip19.npubEncode(getPublicKey(phone)), alert_relays: [ 'wss://hasky.chat' ] }) } catch (e) { threw = String(e) }
+  assert(threw.includes('at least 2 relays'),                         'fewer than 2 alert relays: refused')
+  threw = ''
+  try { resolve_veto_config({ pubkey: 'npub1nope', alert_relays: two }) } catch (e) { threw = String(e) }
+  assert(threw.includes('veto.pubkey'),                               'invalid veto npub: refused')
+  assert(resolve_veto_config({ pubkey: nip19.npubEncode(getPublicKey(phone)), alert_relays: two }).veto_pubkey === getPublicKey(phone), 'npub accepted')
+
+  const real = unwrap_verified(nip17.wrapEvent(phone, { publicKey: getPublicKey(node) }, `veto ${id}`), node)
+  assert(real?.sender === getPublicKey(phone) && real.content === `veto ${id}`, 'genuine NIP-17 DM: sender verified')
+
+  // Forgery: the thief seals with their own key but claims the phone as author.
+  const rumor : any = { kind: 14, created_at: Math.floor(Date.now() / 1000), tags: [[ 'p', getPublicKey(node) ]], content: `veto ${id}`, pubkey: getPublicKey(phone) }
+  rumor.id = getEventHash(rumor)
+  const seal = finalizeEvent({ kind: 13, created_at: rumor.created_at, tags: [], content: nip44.encrypt(JSON.stringify(rumor), nip44.getConversationKey(thief, getPublicKey(node))) }, thief)
+  const throwaway = generateSecretKey()
+  const wrap = finalizeEvent({ kind: 1059, created_at: rumor.created_at, tags: [[ 'p', getPublicKey(node) ]], content: nip44.encrypt(JSON.stringify(seal), nip44.getConversationKey(throwaway, getPublicKey(node))) }, throwaway)
+  assert(unwrap_verified(wrap, node) === null,                        'forged seal (author != seal signer): rejected')
+}

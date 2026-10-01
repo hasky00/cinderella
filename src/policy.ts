@@ -2,9 +2,16 @@
  * Cinderella policy engine.
  *
  * Pure logic, no crypto, no network. Given a Nostr event and a config,
- * decide: allow | deny(reason). Rate limits and delay gates are tracked
- * in memory per process (each share node enforces independently).
+ * decide: allow | deny(reason). Rate limits, held (delay-gated) events and
+ * vetoes are kept per node (each share node enforces independently) and can
+ * be persisted across restarts (see state.ts).
+ *
+ * Veto (see veto.ts, alerts.ts): when alerts are required, a held event's
+ * delay only starts once its alert reached at least one relay (fail-closed),
+ * and a vetoed event is refused for good, even after its unlock.
  */
+
+import { summarize_event } from './summary.js'
 
 export interface RateLimit {
   max_events  : number
@@ -17,11 +24,21 @@ export interface Tier {
   delay_hours? : number
 }
 
+export interface VetoConfig {
+  /** npub or hex pubkey of the veto key (kept on your phone, never a FROSTR share). */
+  pubkey          : string
+  /** At least 2 relays for alerts and vetoes, e.g. your own plus a public one. */
+  alert_relays    : string[]
+  /** The Gateway's notice key (npub or hex), told when an event is vetoed. Optional. */
+  gateway_pubkey? : string
+}
+
 export interface CinderellaConfig {
   version         : number
   default_tier    : 'deny' | string
   require_content : boolean
   tiers           : Record<string, Tier>
+  veto?           : VetoConfig
 }
 
 export interface NostrEvent {
@@ -38,32 +55,68 @@ export type Verdict =
   | { ok : true,  tier : string }
   | { ok : false, tier : string | null, reason : string }
 
+/** A delay-gated event this node is holding. */
+export interface HeldEntry {
+  held_at     : number          // ms, first time this node saw it
+  unlock      : number | null   // ms; null until its alert was delivered (when alerts are required)
+  kind        : number
+  delay_hours : number
+  summary     : string
+}
+
 /** Everything a node must remember across restarts (see state.ts). */
 export interface PolicyState {
-  version : 1
-  history : Record<string, number[]>   // tier -> timestamps (ms)
-  pending : Record<string, number>     // event id -> unlock time (ms)
+  version : 2
+  history : Record<string, number[]>    // tier -> timestamps (ms)
+  pending : Record<string, HeldEntry>   // event id -> held entry
+  vetoed  : Record<string, number>      // event id -> vetoed at (ms)
+  signed  : Record<string, number>      // held event id -> signed at (ms)
+  meta    : Record<string, unknown>     // veto listener bookkeeping (veto.ts)
 }
+
+/** Version 1 (before vetoes): pending was event id -> unlock time. */
+interface PolicyStateV1 {
+  version : 1
+  history : Record<string, number[]>
+  pending : Record<string, number>
+}
+
+export type VetoResult = 'vetoed' | 'already_vetoed' | 'unknown' | 'already_signed' | 'older_than_hold'
 
 export interface PolicyOptions {
   /** State saved by a previous run, so restarts don't reset limits or held events. */
-  state?     : PolicyState
+  state?           : PolicyState | PolicyStateV1
   /** Called after every decision that changed the state, with the state to save. */
-  on_change? : (state : PolicyState) => void
+  on_change?       : (state : PolicyState) => void
+  /**
+   * Veto mode: a held event's delay starts only once its alert was delivered
+   * (alert_delivered()), and on_hold is called so the alert can be sent.
+   */
+  alerts_required? : boolean
+  on_hold?         : (id : string, entry : HeldEntry) => void
+  /** Veto mode: false until the veto feed caught up; unlocked held events are refused meanwhile. */
+  ready?           : () => boolean
 }
 
-/** Held events are forgotten this long after they unlocked without being re-requested. */
+/** Held events are forgotten this long after they unlocked (or were held, if never unlocked). */
 const PENDING_RETENTION_MS = 7 * 24 * 3_600_000
+/** Vetoed and signed ids are remembered this long (so a veto for a signed event is refused). */
+const DECISION_RETENTION_MS = 30 * 24 * 3_600_000
+/** Clock skew allowed between the phone and the node when checking "written before the hold". */
+const VETO_SKEW_MS = 60_000
 
 export class Policy {
   private readonly cfg       : CinderellaConfig
-  private readonly history   = new Map<string, number[]>()   // tier -> timestamps (ms)
-  private readonly pending   = new Map<string, number>()     // event id -> unlock time (ms)
-  private readonly on_change : ((state : PolicyState) => void) | undefined
+  private readonly history   = new Map<string, number[]>()     // tier -> timestamps (ms)
+  private readonly pending   = new Map<string, HeldEntry>()    // event id -> held entry
+  private readonly vetoed    = new Map<string, number>()       // event id -> vetoed at (ms)
+  private readonly signed    = new Map<string, number>()       // held event id -> signed at (ms)
+  private meta               : Record<string, unknown> = {}
+  private readonly opts      : PolicyOptions
 
   constructor (cfg : CinderellaConfig, options : PolicyOptions = {}) {
-    this.cfg       = cfg
-    this.on_change = options.on_change
+    this.cfg  = cfg
+    this.opts = options
     if (options.state) this.load(options.state)
   }
 
@@ -77,25 +130,41 @@ export class Policy {
       const live   = stamps.filter(t => now - t < window)
       if (live.length) history[name] = live
     }
-    const pending : Record<string, number> = {}
-    for (const [ id, unlock ] of this.pending) {
-      if (now - unlock < PENDING_RETENTION_MS) pending[id] = unlock
+    const pending : Record<string, HeldEntry> = {}
+    for (const [ id, entry ] of this.pending) {
+      if (now - (entry.unlock ?? entry.held_at) < PENDING_RETENTION_MS) pending[id] = entry
     }
-    return { version: 1, history, pending }
+    const keep = (m : Map<string, number>) =>
+      Object.fromEntries([ ...m ].filter(([ , at ]) => now - at < DECISION_RETENTION_MS))
+    return { version: 2, history, pending, vetoed: keep(this.vetoed), signed: keep(this.signed), meta: this.meta }
   }
 
-  private load (state : PolicyState) : void {
-    if (state.version !== 1) throw new Error(`policy state: unsupported version ${String(state.version)}`)
+  private load (state : PolicyState | PolicyStateV1) : void {
+    if (state.version !== 1 && state.version !== 2) {
+      throw new Error(`policy state: unsupported version ${String((state as { version : unknown }).version)}`)
+    }
     for (const [ name, stamps ] of Object.entries(state.history ?? {})) {
       if (Array.isArray(stamps)) this.history.set(name, stamps.filter(t => typeof t === 'number'))
     }
-    for (const [ id, unlock ] of Object.entries(state.pending ?? {})) {
-      if (typeof unlock === 'number') this.pending.set(id, unlock)
+    if (state.version === 1) {
+      // Held before vetoes existed: unlock known, kind and summary not.
+      for (const [ id, unlock ] of Object.entries(state.pending ?? {})) {
+        if (typeof unlock === 'number') {
+          this.pending.set(id, { held_at: 0, unlock, kind: -1, delay_hours: 0, summary: '(held before vetoes existed)' })
+        }
+      }
+      return
     }
+    for (const [ id, entry ] of Object.entries(state.pending ?? {})) {
+      if (entry && typeof entry.held_at === 'number') this.pending.set(id, entry)
+    }
+    for (const [ id, at ] of Object.entries(state.vetoed ?? {})) if (typeof at === 'number') this.vetoed.set(id, at)
+    for (const [ id, at ] of Object.entries(state.signed ?? {})) if (typeof at === 'number') this.signed.set(id, at)
+    this.meta = state.meta && typeof state.meta === 'object' ? { ...state.meta } : {}
   }
 
   private changed (now : number) : void {
-    this.on_change?.(this.export_state(now))
+    this.opts.on_change?.(this.export_state(now))
   }
 
   /** Find the tier whose kinds list contains this kind. */
@@ -111,6 +180,10 @@ export class Policy {
    * `now` is injectable for tests.
    */
   evaluate (event : NostrEvent, now = Date.now()) : Verdict {
+    if (this.vetoed.has(event.id)) {
+      return { ok: false, tier: this.tier_for(event.kind), reason: `vetoed: ${event.id.slice(0, 8)} was vetoed from the veto key` }
+    }
+
     const name = this.tier_for(event.kind)
 
     if (name === null) {
@@ -127,20 +200,36 @@ export class Policy {
     const tier = this.cfg.tiers[name]
     if (!tier) return { ok: false, tier: name, reason: `unknown tier ${name}` }
 
-    // 1. Delay gate (vault behaviour): first sighting queues, later sighting after unlock passes.
-    if (tier.delay_hours && tier.delay_hours > 0) {
-      const unlock = this.pending.get(event.id)
-      if (unlock === undefined) {
-        const at = now + tier.delay_hours * 3_600_000
-        this.pending.set(event.id, at)
+    // 1. Delay gate (vault behaviour): first sighting holds, a later sighting after unlock passes.
+    const delayed = !!(tier.delay_hours && tier.delay_hours > 0)
+    if (delayed) {
+      const entry = this.pending.get(event.id)
+      if (entry === undefined) {
+        const held : HeldEntry = {
+          held_at     : now,
+          unlock      : this.opts.alerts_required ? null : now + tier.delay_hours! * 3_600_000,
+          kind        : event.kind,
+          delay_hours : tier.delay_hours!,
+          summary     : summarize_event(event)
+        }
+        this.pending.set(event.id, held)
         this.changed(now)
+        this.opts.on_hold?.(event.id, held)
         return {
           ok: false, tier: name,
-          reason: `queued: kind ${event.kind} unlocks at ${new Date(at).toISOString()} (veto by posting a kind 1)`
+          reason: held.unlock === null
+            ? `queued: kind ${event.kind} held; its ${tier.delay_hours}h delay starts when the veto alert is delivered`
+            : `queued: kind ${event.kind} unlocks at ${new Date(held.unlock).toISOString()}`
         }
       }
-      if (now < unlock) {
-        return { ok: false, tier: name, reason: `still locked until ${new Date(unlock).toISOString()}` }
+      if (entry.unlock === null) {
+        return { ok: false, tier: name, reason: 'held: veto alert not delivered yet, so the delay has not started' }
+      }
+      if (now < entry.unlock) {
+        return { ok: false, tier: name, reason: `still locked until ${new Date(entry.unlock).toISOString()}` }
+      }
+      if (this.opts.ready && !this.opts.ready()) {
+        return { ok: false, tier: name, reason: 'held: catching up on vetoes first' }
       }
     }
 
@@ -157,16 +246,52 @@ export class Policy {
       this.history.set(name, stamps)
     }
 
-    this.pending.delete(event.id)
+    if (delayed) {
+      this.pending.delete(event.id)
+      this.signed.set(event.id, now)
+    }
     this.changed(now)
     return { ok: true, tier: name }
   }
 
-  /** Veto: a kind 1 from a hot signer cancels everything queued. */
-  veto_all () : number {
-    const n = this.pending.size
-    this.pending.clear()
-    if (n) this.changed(Date.now())
-    return n
+  /** Veto mode: the alert for a held event reached a relay, so its delay starts now. */
+  alert_delivered (id : string, at = Date.now()) : boolean {
+    const entry = this.pending.get(id)
+    if (!entry || entry.unlock !== null) return false
+    entry.unlock = at + entry.delay_hours * 3_600_000
+    this.changed(at)
+    return true
+  }
+
+  /**
+   * Veto a held event by its exact id. `written_at` is when the veto message
+   * was written (ms); a veto written before the event was held is refused, so
+   * an old message can't cancel a later identical event.
+   */
+  veto (id : string, written_at : number, now = Date.now()) : VetoResult {
+    if (this.vetoed.has(id))  return 'already_vetoed'
+    if (this.signed.has(id))  return 'already_signed'
+    const entry = this.pending.get(id)
+    if (!entry)               return 'unknown'
+    if (written_at < entry.held_at - VETO_SKEW_MS) return 'older_than_hold'
+    this.pending.delete(id)
+    this.vetoed.set(id, now)
+    this.changed(now)
+    return 'vetoed'
+  }
+
+  /** Held events, e.g. to re-send alerts. */
+  held () : [ string, HeldEntry ][] {
+    return [ ...this.pending ]
+  }
+
+  /** Bookkeeping for the veto listener, persisted with the policy state. */
+  get_meta<T> (key : string) : T | undefined {
+    return this.meta[key] as T | undefined
+  }
+
+  set_meta (key : string, value : unknown, now = Date.now()) : void {
+    this.meta = { ...this.meta, [key]: value }
+    this.changed(now)
   }
 }

@@ -8,17 +8,18 @@
  */
 
 import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
-import type { PolicyState } from './policy.js'
+import type { PolicyOptions, PolicyState } from './policy.js'
 
-export function load_policy_state (path : string) : PolicyState | undefined {
+/** A saved state (version 1 or 2; Policy converts version 1). */
+export function load_policy_state (path : string) : PolicyOptions['state'] {
   if (!existsSync(path)) return undefined
-  let state : PolicyState
+  let state : NonNullable<PolicyOptions['state']>
   try {
     state = JSON.parse(readFileSync(path, 'utf8'))
   } catch (err) {
     throw new Error(`cinderella: policy state ${path} is unreadable (${err instanceof Error ? err.message : String(err)}); fix or remove it deliberately`)
   }
-  if (state?.version !== 1 || typeof state.history !== 'object' || typeof state.pending !== 'object') {
+  if ((state?.version !== 1 && state?.version !== 2) || typeof state.history !== 'object' || typeof state.pending !== 'object') {
     throw new Error(`cinderella: policy state ${path} has an unexpected format; fix or remove it deliberately`)
   }
   return state
