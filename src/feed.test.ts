@@ -5,7 +5,7 @@
  *  N3  a relay that goes silent (socket open, no answers) counts as dead
  *  N4  exponential backoff on CLOSED and on relays that drop at once; timers unref'd
  *  N5  a clear error without a global WebSocket; engines node >= 22
- *  N1  an unhandled rejection is logged, the process keeps running
+ *  R3  an unhandled rejection is logged and stops the process (fail-closed)
  */
 
 import { spawnSync }    from 'node:child_process'
@@ -91,16 +91,16 @@ setTimeout(() => console.log('still here'), 3000).unref()
   const pkg = JSON.parse(readFileSync('./package.json', 'utf8'))
   assert(pkg.engines?.node === '>=22',                                'package.json engines: node >= 22')
 
-  console.log('N1) a missed rejection does not crash the node')
+  console.log('R3) a missed rejection is logged and stops the node')
   const guard = join(dir, 'guard.ts')
   writeFileSync(guard, `import { install_rejection_guard } from ${JSON.stringify(join(process.cwd(), 'src/guards.ts'))}
 install_rejection_guard((l, m) => console.log(l, m.split('\\n')[0]))
 void Promise.reject(new Error('boom'))
-setTimeout(() => console.log('alive'), 300)
+setTimeout(() => console.log('still signing'), 1000)
 `)
   const g2 = spawnSync(tsx, [ guard ], { timeout: 8000, encoding: 'utf8' })
-  assert(g2.status === 0 && g2.stdout.includes('alive'),              'process still alive after an unhandled rejection')
-  assert(g2.stdout.includes('unhandled promise rejection') && g2.stdout.includes('boom'), 'and the rejection was logged')
+  assert(g2.status === 1 && !g2.stdout.includes('still signing'),     `process stops after an unhandled rejection (exit ${g2.status})`)
+  assert(g2.stdout.includes('stopping the node') && g2.stdout.includes('boom'), 'and the rejection was logged first')
 } catch (err) {
   console.log('  FAIL', 'unexpected error:', err)
   process.exitCode = 1

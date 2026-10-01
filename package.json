@@ -7,13 +7,14 @@
   "scripts": {
     "build": "tsc",
     "dev": "tsx src/node.ts",
-    "test": "tsx src/policy.test.ts && tsx src/e2e.test.ts && tsx src/restart.test.ts && tsx src/feed.test.ts && tsx src/veto.test.ts",
+    "test": "tsx src/policy.test.ts && tsx src/e2e.test.ts && tsx src/restart.test.ts && tsx src/feed.test.ts && tsx src/startup.test.ts && tsx src/veto.test.ts",
     "test:unit": "tsx src/policy.test.ts",
     "test:e2e": "tsx src/e2e.test.ts",
     "typecheck": "tsc --noEmit",
     "test:restart": "tsx src/restart.test.ts",
     "test:veto": "tsx src/veto.test.ts",
-    "test:feed": "tsx src/feed.test.ts"
+    "test:feed": "tsx src/feed.test.ts",
+    "test:startup": "tsx src/startup.test.ts"
   },
   "dependencies": {
     "@frostr/bifrost": "2.0.2",

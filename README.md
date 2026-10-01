@@ -99,8 +99,11 @@ The node answers `vetoed …` and refuses that event for good, even after its un
    }
    ```
    `node_count` is **required**: how many Cinderella share nodes you run (`1` for a single node).
-   With more than 1, `peer_alert_pubkeys` must list exactly the other nodes' alert npubs, otherwise
-   the node refuses to start (a veto reply would not reach every node).
+   With more than 1, `peer_alert_pubkeys` must list exactly the **other** nodes' alert npubs, so each
+   node's list is different; don't copy one shared list to every node. The node refuses to start if
+   the count doesn't match, if the list contains its own alert key, or if `node_count` is larger than
+   the FROSTR group's share count (a veto reply would not reach every node). A `node_count` smaller
+   than the share count is allowed (not every share has to run Cinderella) and logged at startup.
    At least **2** alert relays, otherwise the node refuses to start: use your own relay plus a public
    one, so a single blocked or compromised relay can't hide an alert or a veto.
 3. **Restart the node.** On first start it creates its **alert key** (`CINDERELLA_ALERT_KEY`,
@@ -135,9 +138,19 @@ phone gets them where it listens.
 - **New veto key, veto turned on later, or turned off and on again (even with the same key):** every
   event the node is holding gets a new alert to the veto key, and its delay **restarts** from that
   alert's delivery.
-- A malformed event from a relay is logged and dropped; an error while handling one is logged; the
-  node never crashes on relay input. Needs **Node 22 or newer** (built-in WebSocket); older versions
-  stop with a clear error.
+- **Limit: a relay that stops delivering but stays connected still counts as live.** "Live" means
+  the relay answers at all (heartbeat replies count), not that it still delivers events on the veto
+  subscription. A relay that keeps the socket open, answers heartbeats and quietly drops your veto
+  can't be told apart from one that has nothing new. Requiring every alert relay to be caught up
+  only covers this if your veto reaches **more than one** of them: give your veto key at least two
+  DM inbox relays (kind 10050), ideally the same ones as the nodes' alert relays, and run the alert
+  relays on different operators.
+- A malformed event from a relay is logged and dropped, and an error while handling one is logged;
+  relay input never stops the node. Any **other** unexpected failure (a promise rejection nothing
+  handled, e.g. in bifrost or while saving state) is logged and **stops the node** (exit code 1)
+  instead of letting it keep signing in a state nobody checked; run it under a supervisor that
+  restarts it (launchd `KeepAlive`, systemd `Restart=on-failure`, Docker `restart: unless-stopped`).
+  Needs **Node 22 or newer** (built-in WebSocket); older versions stop with a clear error.
 - With several share nodes, give each one the same veto key and alert relays: every node enforces its
   own vetoes, and the group DM makes one reply reach all of them.
 
@@ -164,7 +177,8 @@ npm test            # unit + e2e
 npm run test:e2e    # throwaway 2-of-3 group, real bifrost nodes, in-process relay
 npm run test:restart  # nonce resync after requester / share node restarts, refusal nonce spend
 npm run test:veto     # alerts and vetoes: local relays, a test phone, offline catch-up, key rotation
-npm run test:feed     # veto feed: every relay caught up, idle timeout, backoff, crash guard
+npm run test:feed     # veto feed: every relay caught up, idle timeout, backoff, rejection guard
+npm run test:startup  # node.ts refuses bad veto setups (own key as peer, node_count vs group)
 ```
 
 ## Roadmap

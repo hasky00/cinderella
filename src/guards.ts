@@ -1,13 +1,16 @@
 /**
- * Last line of defence for a long-running share node: a promise rejection
- * nobody handled is logged instead of crashing the process (Node's default
- * since v15). Errors should still be caught where they happen; this only
- * keeps one missed case from taking the node down.
+ * A promise rejection nobody handled means some part of the node failed in a
+ * way nothing checked (bifrost, saving state, …). Log it and stop the node
+ * (fail-closed): a supervisor (launchd, systemd, Docker) restarts it from its
+ * saved state, instead of it signing on in a state nobody checked. Errors are
+ * caught where they are expected (e.g. the veto feed's event handler); this
+ * only decides what happens to the unexpected ones.
  */
 
-export function install_rejection_guard (log : (level : 'deny', msg : string) => void) : void {
+export function install_rejection_guard (log : (level : 'deny', msg : string) => void, exit : (code : number) => void = code => process.exit(code)) : void {
   process.on('unhandledRejection', (reason : unknown) => {
     const msg = reason instanceof Error ? (reason.stack ?? reason.message) : String(reason)
-    log('deny', `unhandled promise rejection (node keeps running): ${msg}`)
+    log('deny', `unhandled promise rejection, stopping the node: ${msg}`)
+    exit(1)
   })
 }

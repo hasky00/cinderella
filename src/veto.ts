@@ -64,6 +64,29 @@ export function resolve_veto_config (cfg : VetoConfig) : ResolvedVetoConfig {
   }
 }
 
+/**
+ * Startup checks that need this node's alert key and FROSTR group, which
+ * resolve_veto_config doesn't see. Throws on a setup that would leave a node
+ * out of the veto group; returns warnings to log.
+ *
+ *  - this node's own alert key must not be among peer_alert_pubkeys (copying one
+ *    shared list to every node would pass the count check, but this node would
+ *    then never be in the group: no alerts reach the phone, no vetoes reach it);
+ *  - node_count can't exceed the group's share count; fewer is allowed (not every
+ *    share has to run Cinderella) but logged.
+ */
+export function check_node_setup (cfg : ResolvedVetoConfig, own_alert_pubkey : string, group_size : number) : string[] {
+  if (cfg.peer_alert_pubkeys.includes(own_alert_pubkey)) {
+    throw new Error('cinderella: veto.peer_alert_pubkeys lists this node\'s own alert key; list only the OTHER nodes\' alert npubs (each node\'s list is different)')
+  }
+  if (cfg.node_count > group_size) {
+    throw new Error(`cinderella: veto.node_count is ${cfg.node_count}, but the FROSTR group has only ${group_size} shares`)
+  }
+  return cfg.node_count < group_size
+    ? [ `veto.node_count is ${cfg.node_count} of ${group_size} shares in the group: the other ${group_size - cfg.node_count} share(s) don't run Cinderella and get no alerts or vetoes` ]
+    : []
+}
+
 /** A relay can send anything: only a well-formed Nostr event goes on to handle(). */
 export function is_event_shape (ev : unknown) : ev is NostrToolsEvent {
   if (!ev || typeof ev !== 'object' || Array.isArray(ev)) return false
@@ -167,7 +190,7 @@ export class VetoController {
   policy_options () : Pick<PolicyOptions, 'alerts_required' | 'on_hold' | 'ready'> {
     return {
       alerts_required : true,
-      on_hold         : (id, entry) => { void this.alert(id, entry) },
+      on_hold         : (id, entry) => this.bg(`alert for ${id.slice(0, 8)}`, this.alert(id, entry)),
       ready           : () => this.ready,
     }
   }
@@ -198,8 +221,13 @@ export class VetoController {
     return true
   }
 
+  /** A background send: a failure is logged (and retried where that applies), never left unhandled. */
+  private bg (what : string, p : Promise<unknown>) : void {
+    p.catch(err => this.log('deny', `veto: ${what} failed: ${err instanceof Error ? err.message : String(err)}`))
+  }
+
   private say (text : string) : void {
-    void this.channel.send_group(this.members, `Cinderella: ${text}`)
+    this.bg('group message', this.channel.send_group(this.members, `Cinderella: ${text}`))
   }
 
   /** Start: inbox list, key check, live veto feed, retry loop. */
@@ -207,7 +235,7 @@ export class VetoController {
     this.policy = policy
     const { veto_pubkey } = this.opts.config
 
-    void this.channel.publish_inbox()
+    this.bg('publishing the DM inbox list', this.channel.publish_inbox())
 
     // Veto key set for the first time or changed: every held event restarts its
     // delay from a new alert to this key (the key never saw them before).
@@ -259,13 +287,13 @@ export class VetoController {
 
     // Retry undelivered alerts; advance each relay's catch-up point only while it is live.
     this.timer = setInterval(() => {
-      for (const [ id, entry ] of policy.held()) if (entry.unlock === null) void this.alert(id, entry)
+      for (const [ id, entry ] of policy.held()) if (entry.unlock === null) this.bg(`alert for ${id.slice(0, 8)}`, this.alert(id, entry))
       advance(this.feed?.caught_up_relays ?? [])
     }, this.opts.retry_ms ?? RETRY_INTERVAL_MS)
     if (typeof this.timer.unref === 'function') this.timer.unref()
 
     // Alerts not yet delivered (new, restarted, or from before a restart).
-    for (const [ id, entry ] of policy.held()) if (entry.unlock === null) void this.alert(id, entry)
+    for (const [ id, entry ] of policy.held()) if (entry.unlock === null) this.bg(`alert for ${id.slice(0, 8)}`, this.alert(id, entry))
   }
 
   /** One incoming gift wrap. Recorded as handled only once verified and from the veto key. */
@@ -299,7 +327,7 @@ export class VetoController {
     this.log(result === 'vetoed' ? 'deny' : 'info', `veto ${id.slice(0, 8)}: ${result}`)
     this.say(REPLIES[result](id))
     if (result === 'vetoed' && this.opts.config.gateway_pubkey) {
-      void this.channel.send_dm(this.opts.config.gateway_pubkey, JSON.stringify({ type: 'cinderella-veto', id, status: 'vetoed' }))
+      this.bg('Gateway notice', this.channel.send_dm(this.opts.config.gateway_pubkey, JSON.stringify({ type: 'cinderella-veto', id, status: 'vetoed' })))
     }
   }
 
