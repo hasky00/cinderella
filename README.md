@@ -70,7 +70,8 @@ file stops the node rather than silently resetting; fix or remove it deliberatel
 
 When a node holds a delay-gated event (profile, deletion, media server list), it sends a private
 Nostr DM (NIP-17) to your **veto key**: a separate npub that lives only on your phone, never a FROSTR
-share. Reply with the exact line from the alert to cancel it:
+share. With several share nodes the alert is a **group DM** with the veto key and every node, so
+**one reply in that group vetoes on every node**. Reply with the exact line from the alert:
 
 ```
 Cinderella: held a profile change (kind 0): name: pumpkin
@@ -90,7 +91,8 @@ The node answers `vetoed …` and refuses that event for good, even after its un
    "veto": {
      "pubkey": "npub1…your veto key…",
      "alert_relays": [ "wss://hasky.chat", "wss://nos.lol" ],
-     "gateway_pubkey": "npub1…the Gateway's notice key (optional)…"
+     "gateway_pubkey": "npub1…the Gateway's notice key (optional)…",
+     "peer_alert_pubkeys": [ "npub1…the OTHER nodes' alert keys (with more than one node)…" ]
    }
    ```
    At least **2** alert relays, otherwise the node refuses to start: use your own relay plus a public
@@ -98,7 +100,11 @@ The node answers `vetoed …` and refuses that event for good, even after its un
 3. **Restart the node.** On first start it creates its **alert key** (`CINDERELLA_ALERT_KEY`,
    default `cinderella.alert.key` next to the state file, mode 600; not a share) and logs its npub.
    Add that npub as a contact on your phone. It also publishes its DM inbox list (kind 10050) so your
-   replies reach the alert relays.
+   replies reach the alert relays. With several nodes, put each node's alert npub in the others'
+   `peer_alert_pubkeys`, then reply in the group the alerts arrive in.
+
+Alerts go to the alert relays **and** to your veto key's own DM inbox relays (its kind 10050), so your
+phone gets them where it listens.
 
 ### Rules
 
@@ -109,9 +115,15 @@ The node answers `vetoed …` and refuses that event for good, even after its un
   told why), so old messages can't be replayed.
 - **Fail-closed alerts:** the delay starts only once at least one alert relay accepted the alert.
   Until then the event stays held and the alert is retried every minute.
-- **Offline:** DMs wait on the relays. After a restart the node first catches up (2 days back: gift
-  wraps carry randomized timestamps) and refuses unlocked held events until it has.
-- With several share nodes, give each one the same `veto` config: every node enforces its own vetoes.
+- **Live veto feed:** the node counts as caught up only while at least one alert relay is connected
+  and has sent a real end-of-stored-events (EOSE) for its subscription. Until then, after a restart,
+  and whenever all relay connections drop, it refuses unlocked held events and reconnects. DMs wait on
+  the relays, and catch-up starts 2 days before the last time it was caught up (gift wraps carry
+  randomized timestamps).
+- **New veto key, or veto turned on later:** every event the node is already holding gets a new alert
+  to that key, and its delay **restarts** from that alert's delivery.
+- With several share nodes, give each one the same veto key and alert relays: every node enforces its
+  own vetoes, and the group DM makes one reply reach all of them.
 
 ### Phone lost: rotate the veto key
 
@@ -120,7 +132,8 @@ The node answers `vetoed …` and refuses that event for good, even after its un
 3. Restart the node (`launchctl kickstart -k gui/$(id -u)/<label>` for the launchd service).
 
 The node then ignores the old npub, tells the new one "this npub is now the veto key", and alerts every
-event it is still holding to the new key, so pending events can still be vetoed. This can only be done
+event it is still holding to the new key; their delays restart from those alerts, so the new key gets
+the full delay to veto them. This can only be done
 on the node's machine: neither a share nor the Gateway can change the veto key. Someone holding the
 lost phone's key until then can only veto your own held events; they can't sign anything.
 

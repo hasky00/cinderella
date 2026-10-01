@@ -8,7 +8,8 @@
  */
 
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
-import { SimplePool, finalizeEvent, generateSecretKey, getPublicKey, nip17, nip19 } from 'nostr-tools'
+import { SimplePool, finalizeEvent, generateSecretKey, getPublicKey, nip17, nip19, nip59 } from 'nostr-tools'
+import type { Event as NostrToolsEvent } from 'nostr-tools'
 import { bytesToHex, hexToBytes } from '@noble/hashes/utils'
 import type { HeldEntry } from './policy.js'
 
@@ -55,29 +56,86 @@ function within<T> (p : Promise<T>, ms : number) : Promise<T> {
   return Promise.race([ p, new Promise<T>((_, reject) => setTimeout(() => reject(new Error('timed out')), ms)) ])
 }
 
+/**
+ * A NIP-17 group message: ONE rumor listing every member, sealed and wrapped
+ * separately for each. (nostr-tools' nip17.wrapManyEvents sends separate 1:1
+ * messages instead, so a reply would reach only one member.) A reply in the
+ * same group reaches every member, e.g. every Cinderella node at once.
+ */
+export function wrap_group (sk : Uint8Array, members : string[], text : string) : Map<string, NostrToolsEvent> {
+  const sender = getPublicKey(sk)
+  const others = Array.from(new Set(members)).filter(pk => pk !== sender)
+  const rumor  = nip59.createRumor({ kind: 14, tags: others.map(pk => [ 'p', pk ]), content: text }, sk)
+  const wraps  = new Map<string, NostrToolsEvent>()
+  for (const pk of others) wraps.set(pk, nip59.createWrap(nip59.createSeal(rumor, sk, pk), pk))
+  return wraps
+}
+
+const INBOX_TTL_MS = 10 * 60_000
+
 export class AlertChannel {
   readonly pool = new SimplePool()
+  private readonly inboxes = new Map<string, { relays : string[], at : number }>()
 
   constructor (
     private readonly key    : AlertKey,
     readonly relays         : string[]
   ) {}
 
-  private async publish (event : Parameters<SimplePool['publish']>[1]) : Promise<SendResult> {
-    const results = await Promise.allSettled(this.pool.publish(this.relays, event).map(p => within(p, PUBLISH_TIMEOUT_MS)))
+  private async publish_to (relays : string[], event : Parameters<SimplePool['publish']>[1]) : Promise<SendResult> {
+    const results = await Promise.allSettled(this.pool.publish(relays, event).map(p => within(p, PUBLISH_TIMEOUT_MS)))
     const accepted : string[] = []
     const failed : Record<string, string> = {}
     results.forEach((r, i) => {
-      const relay = this.relays[i]!
+      const relay = relays[i]!
       if (r.status === 'fulfilled') accepted.push(relay)
       else failed[relay] = String((r.reason as Error)?.message ?? r.reason)
     })
     return { accepted, failed }
   }
 
-  /** NIP-17 private message to `to` (hex pubkey). */
-  send_dm (to : string, text : string) : Promise<SendResult> {
-    return this.publish(nip17.wrapEvent(this.key.sk, { publicKey: to }, text))
+  private publish (event : Parameters<SimplePool['publish']>[1]) : Promise<SendResult> {
+    return this.publish_to(this.relays, event)
+  }
+
+  /** A pubkey's NIP-17 DM inbox relays (kind 10050), looked up on our relays, cached. */
+  async inbox_relays (pubkey : string) : Promise<string[]> {
+    const cached = this.inboxes.get(pubkey)
+    if (cached && Date.now() - cached.at < INBOX_TTL_MS) return cached.relays
+    let relays : string[] = []
+    try {
+      const events = await within(this.pool.querySync(this.relays, { kinds: [ 10050 ], authors: [ pubkey ] }, { maxWait: 5_000 }), 6_000)
+      const newest = events.sort((a, b) => b.created_at - a.created_at)[0]
+      relays = (newest?.tags ?? [])
+        .filter(t => t[0] === 'relay' && typeof t[1] === 'string' && /^wss?:\/\/\S+$/.test(t[1]))
+        .map(t => t[1]!)
+    } catch { /* none found: our relays only */ }
+    this.inboxes.set(pubkey, { relays, at: Date.now() })
+    return relays
+  }
+
+  /** Our alert relays plus the recipient's inbox relays. */
+  async relays_for (pubkey : string) : Promise<string[]> {
+    return Array.from(new Set([ ...this.relays, ...(await this.inbox_relays(pubkey)) ]))
+  }
+
+  /** NIP-17 private message to `to` (hex pubkey), also to its inbox relays. */
+  async send_dm (to : string, text : string) : Promise<SendResult> {
+    return this.publish_to(await this.relays_for(to), nip17.wrapEvent(this.key.sk, { publicKey: to }, text))
+  }
+
+  /**
+   * NIP-17 group message to `members` (hex pubkeys; we are added implicitly).
+   * Returns the result per member; each wrap goes to our relays plus that
+   * member's inbox relays.
+   */
+  async send_group (members : string[], text : string) : Promise<Map<string, SendResult>> {
+    const wraps = wrap_group(this.key.sk, members, text)
+    const out = new Map<string, SendResult>()
+    await Promise.all([ ...wraps ].map(async ([ pk, wrap ]) => {
+      out.set(pk, await this.publish_to(await this.relays_for(pk), wrap))
+    }))
+    return out
   }
 
   /** NIP-17 DM inbox list (kind 10050), so replies are sent to our alert relays. */

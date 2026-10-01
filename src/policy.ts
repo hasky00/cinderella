@@ -31,6 +31,11 @@ export interface VetoConfig {
   alert_relays    : string[]
   /** The Gateway's notice key (npub or hex), told when an event is vetoed. Optional. */
   gateway_pubkey? : string
+  /**
+   * The alert keys of the OTHER Cinderella nodes. Alerts become a group DM
+   * with the veto key and all nodes, so one veto reply reaches every node.
+   */
+  peer_alert_pubkeys? : string[]
 }
 
 export interface CinderellaConfig {
@@ -252,6 +257,22 @@ export class Policy {
     }
     this.changed(now)
     return { ok: true, tier: name }
+  }
+
+  /**
+   * Veto mode: (re)start the delay of every held event from its next alert's
+   * delivery. Used when the veto key is set for the first time or changed:
+   * events held before then were never seen by the (new) veto key. Entries
+   * that don't know their delay (from version 1 state) get the longest one.
+   */
+  restart_delays (now = Date.now()) : number {
+    const longest = Math.max(0, ...Object.values(this.cfg.tiers).map(t => t.delay_hours ?? 0))
+    for (const entry of this.pending.values()) {
+      if (!(entry.delay_hours > 0)) entry.delay_hours = longest
+      entry.unlock = null
+    }
+    if (this.pending.size) this.changed(now)
+    return this.pending.size
   }
 
   /** Veto mode: the alert for a held event reached a relay, so its delay starts now. */

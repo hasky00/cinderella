@@ -34,8 +34,9 @@ export class TestRelay {
     return `ws://127.0.0.1:${port}`
   }
 
-  async start () : Promise<void> {
-    this.wss = new WebSocketServer({ host: '127.0.0.1', port: 0 })
+  /** `port`: reuse a port, e.g. to restart a relay that was closed (tests of reconnects). */
+  async start (port = 0) : Promise<void> {
+    this.wss = new WebSocketServer({ host: '127.0.0.1', port })
     await new Promise<void>(r => this.wss!.once('listening', () => r()))
     this.wss.on('connection', ws => {
       this.subs.set(ws, new Map())
