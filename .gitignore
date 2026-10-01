@@ -5,3 +5,5 @@ dist
 *.state.json
 *.state.json.tmp
 *.alert.key
+.env.dryrun
+.DS_Store
