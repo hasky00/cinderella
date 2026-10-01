@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Cinderella share node as a macOS LaunchAgent. Code: a pinned checkout (e.g. a git worktree).
+     Settings incl. the share: an env file passed by path (mode 600, never copied).
+     Policy/state: CINDERELLA_CONFIG / CINDERELLA_STATE in that env file. -->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>org.example.cinderella.node</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/opt/homebrew/opt/node@22/bin/node</string>
+    <string>/Users/YOU/cinderella-node/app/node_modules/tsx/dist/cli.mjs</string>
+    <string>--env-file=/Users/YOU/cinderella-node/node.env</string>
+    <string>src/node.ts</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>/Users/YOU/cinderella-node/app</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/opt/homebrew/opt/node@22/bin:/usr/bin:/bin</string>
+  </dict>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ThrottleInterval</key>
+  <integer>10</integer>
+  <key>StandardOutPath</key>
+  <string>/Users/YOU/cinderella-node/node.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/YOU/cinderella-node/node.log</string>
+</dict>
+</plist>

@@ -59,6 +59,27 @@ pool state: restoring a stale snapshot can reuse a nonce, which leaks that share
 
 This reaches into bifrost internals, so `@frostr/bifrost` is pinned to exactly `2.0.2`.
 
+## Run as a macOS background service (launchd)
+
+`deploy/launchd/cinderella-node.plist.example` starts the node at login, restarts it if it crashes
+(at most every 10 s) and logs to a file. Replace `/Users/YOU`, the label and the paths, then:
+
+```bash
+git worktree add --detach ~/cinderella-node/app main   # pinned code, unaffected by branch switches
+(cd ~/cinderella-node/app && npm ci)
+chmod 600 ~/cinderella-node/node.env                    # CINDERELLA_SHARE/GROUP/RELAYS/CONFIG/STATE
+cp deploy/launchd/cinderella-node.plist.example ~/Library/LaunchAgents/org.example.cinderella.node.plist
+
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/org.example.cinderella.node.plist   # start (and at every login)
+launchctl print gui/$(id -u)/org.example.cinderella.node | grep -E 'state|pid|runs'          # status
+launchctl bootout gui/$(id -u)/org.example.cinderella.node                                    # stop (stays stopped)
+launchctl kickstart -k gui/$(id -u)/org.example.cinderella.node                              # restart
+tail -f ~/cinderella-node/node.log                                                              # log
+```
+
+To update the code, move the worktree to the new commit (`git -C ~/cinderella-node/app checkout --detach <commit>`,
+then `npm ci`) and restart.
+
 ## State across restarts
 
 Each node saves its rate-limit counters and held (delay-gated) events to `CINDERELLA_STATE`
