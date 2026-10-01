@@ -148,12 +148,12 @@ console.log('veto: commands, config, verified unwrap')
   const phone = generateSecretKey(), node = generateSecretKey(), thief = generateSecretKey()
   const two = [ 'wss://hasky.chat', 'wss://nos.lol' ]
   let threw = ''
-  try { resolve_veto_config({ pubkey: nip19.npubEncode(getPublicKey(phone)), alert_relays: [ 'wss://hasky.chat' ] }) } catch (e) { threw = String(e) }
+  try { resolve_veto_config({ pubkey: nip19.npubEncode(getPublicKey(phone)), alert_relays: [ 'wss://hasky.chat' ], node_count: 1 }) } catch (e) { threw = String(e) }
   assert(threw.includes('at least 2 relays'),                         'fewer than 2 alert relays: refused')
   threw = ''
-  try { resolve_veto_config({ pubkey: 'npub1nope', alert_relays: two }) } catch (e) { threw = String(e) }
+  try { resolve_veto_config({ pubkey: 'npub1nope', alert_relays: two, node_count: 1 }) } catch (e) { threw = String(e) }
   assert(threw.includes('veto.pubkey'),                               'invalid veto npub: refused')
-  assert(resolve_veto_config({ pubkey: nip19.npubEncode(getPublicKey(phone)), alert_relays: two }).veto_pubkey === getPublicKey(phone), 'npub accepted')
+  assert(resolve_veto_config({ pubkey: nip19.npubEncode(getPublicKey(phone)), alert_relays: two, node_count: 1 }).veto_pubkey === getPublicKey(phone), 'npub accepted')
 
   const real = unwrap_verified(nip17.wrapEvent(phone, { publicKey: getPublicKey(node) }, `veto ${id}`), node)
   assert(real?.sender === getPublicKey(phone) && real.content === `veto ${id}`, 'genuine NIP-17 DM: sender verified')

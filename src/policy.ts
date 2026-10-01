@@ -36,8 +36,8 @@ export interface VetoConfig {
    * with the veto key and all nodes, so one veto reply reaches every node.
    */
   peer_alert_pubkeys? : string[]
-  /** How many Cinderella share nodes there are (default: 1 + peer_alert_pubkeys). With more than 1, peer_alert_pubkeys must list the others. */
-  node_count? : number
+  /** How many Cinderella share nodes there are. Required, so a missing peer can't go unnoticed; with more than 1, peer_alert_pubkeys must list the others. */
+  node_count : number
 }
 
 export interface CinderellaConfig {

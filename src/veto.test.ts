@@ -22,7 +22,7 @@
  *  8. veto enabled on a node that already holds events: alerted, delays restart
  *  9. veto turned off and on again with the SAME key: re-alerted, delays restart
  * 10. malformed events and a throwing handler: logged, the node keeps running
- * 11. node_count above 1 without peer_alert_pubkeys: refused
+ * 11. node_count missing, or above 1 without peer_alert_pubkeys: refused
  */
 
 import { mkdtempSync } from 'node:fs'
@@ -72,7 +72,7 @@ const b_pk = load_or_create_alert_key(B.key).pubkey
 const tiers = { daily: { kinds: [ 1, 7 ] }, identity: { kinds: [ 0 ], delay_hours: DELAY_H } }
 const cfg_for = (veto_pk : Uint8Array, peers : string[], relays = alert_relays) : CinderellaConfig => ({
   version: 1, default_tier: 'deny', require_content: true, tiers,
-  veto: { pubkey: getPublicKey(veto_pk), alert_relays: relays, gateway_pubkey: getPublicKey(gw_notice), peer_alert_pubkeys: peers }
+  veto: { pubkey: getPublicKey(veto_pk), alert_relays: relays, gateway_pubkey: getPublicKey(gw_notice), node_count: peers.length + 1, peer_alert_pubkeys: peers }
 })
 
 // A share node exactly as node.ts wires it.
@@ -288,11 +288,14 @@ try {
   assert(await until(() => !a.policy.held().some(([ id ]) => id === seventh.id)), 'and a veto afterwards still works')
 
   console.log('11) more than one node needs the other nodes\' alert keys')
-  const refuse = (v : Record<string, unknown>) => { try { resolve_veto_config({ pubkey: getPublicKey(phone), alert_relays, ...v }); return '' } catch (e) { return String(e) } }
+  const refuse = (v : Record<string, unknown>) => { try { resolve_veto_config({ pubkey: getPublicKey(phone), alert_relays, ...v } as Parameters<typeof resolve_veto_config>[0]); return '' } catch (e) { return String(e) } }
   assert(refuse({ node_count: 2 }).includes('peer_alert_pubkeys'),   'node_count 2, no peers: refused')
   assert(refuse({ node_count: 2, peer_alert_pubkeys: [] }).includes('peer_alert_pubkeys'), 'node_count 2, empty peers: refused')
   assert(refuse({ node_count: 3, peer_alert_pubkeys: [ a_pk ] }).includes('peer_alert_pubkeys'), 'node_count 3, one peer: refused')
-  assert(refuse({ node_count: 2, peer_alert_pubkeys: [ a_pk ] }) === '' && refuse({}) === '', 'matching peers, or one node: fine')
+  assert(refuse({}).includes('node_count is required'),              'node_count missing: refused')
+  assert(refuse({ peer_alert_pubkeys: [ a_pk ] }).includes('node_count is required'), 'node_count missing, peers listed: refused')
+  assert(refuse({ node_count: 0 }).includes('whole number') && refuse({ node_count: 1.5 }).includes('whole number'), 'node_count 0 or 1.5: refused')
+  assert(refuse({ node_count: 2, peer_alert_pubkeys: [ a_pk ] }) === '' && refuse({ node_count: 1 }) === '', 'matching peers, or one node: fine')
 } catch (err) {
   console.log('  FAIL', 'unexpected error:', err)
   process.exitCode = 1

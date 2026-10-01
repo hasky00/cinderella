@@ -98,9 +98,9 @@ The node answers `vetoed …` and refuses that event for good, even after its un
      "peer_alert_pubkeys": [ "npub1…the OTHER nodes' alert keys (node_count - 1 of them)…" ]
    }
    ```
-   `node_count` is how many Cinderella share nodes you run. With more than 1, `peer_alert_pubkeys`
-   must list exactly the other nodes' alert npubs, otherwise the node refuses to start (a veto reply
-   would not reach every node). Left out, it is 1 plus the number of `peer_alert_pubkeys`.
+   `node_count` is **required**: how many Cinderella share nodes you run (`1` for a single node).
+   With more than 1, `peer_alert_pubkeys` must list exactly the other nodes' alert npubs, otherwise
+   the node refuses to start (a veto reply would not reach every node).
    At least **2** alert relays, otherwise the node refuses to start: use your own relay plus a public
    one, so a single blocked or compromised relay can't hide an alert or a veto.
 3. **Restart the node.** On first start it creates its **alert key** (`CINDERELLA_ALERT_KEY`,

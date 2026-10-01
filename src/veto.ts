@@ -48,8 +48,9 @@ export function resolve_veto_config (cfg : VetoConfig) : ResolvedVetoConfig {
     throw new Error('cinderella: veto.alert_relays needs at least 2 relays (e.g. your own and a public one), so one blocked relay cannot hide an alert')
   }
   const peers = Array.from(new Set((cfg.peer_alert_pubkeys ?? []).map(pk => to_hex_pubkey(pk, 'veto.peer_alert_pubkeys'))))
-  // Not set: this node plus the peers it lists. Set: the peers must match it.
-  const node_count = cfg.node_count ?? peers.length + 1
+  // Required, never derived from the peer list: a forgotten peer must stop the node, not shrink the count.
+  const node_count = cfg.node_count
+  if (node_count === undefined || node_count === null) throw new Error('cinderella: veto.node_count is required: how many Cinderella share nodes you run (1 or more)')
   if (!Number.isInteger(node_count) || node_count < 1) throw new Error('cinderella: veto.node_count must be a whole number of Cinderella share nodes (1 or more)')
   if (peers.length !== node_count - 1) {
     throw new Error(`cinderella: veto.node_count is ${node_count}, so veto.peer_alert_pubkeys needs the alert npubs of the other ${node_count - 1} node(s) (got ${peers.length}); otherwise one veto reply would not reach every node`)
