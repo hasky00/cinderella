@@ -13,7 +13,9 @@ import { Policy }         from './policy.js'
 import { create_share_node } from './share-node.js'
 import { load_policy_state, save_policy_state } from './state.js'
 import { load_or_create_alert_key } from './alerts.js'
-import { VetoController, resolve_veto_config } from './veto.js'
+import { VetoController, mark_veto_disabled, resolve_veto_config } from './veto.js'
+import { install_rejection_guard } from './guards.js'
+import { assert_websocket } from './relay-feed.js'
 import type { CinderellaConfig } from './policy.js'
 
 const env = (k : string, d? : string) => {
@@ -25,6 +27,15 @@ const env = (k : string, d? : string) => {
 const cfg : CinderellaConfig = JSON.parse(readFileSync(env('CINDERELLA_CONFIG', './cinderella.config.json'), 'utf8'))
 
 const log = (lvl : string, m : string) => console.log(`[${new Date().toISOString()}] ${lvl.padEnd(5)} ${m}`)
+
+// One bad event or a missed rejection must never take the node down.
+install_rejection_guard(log)
+try {
+  assert_websocket()
+} catch (err) {
+  log('deny', err instanceof Error ? err.message : String(err))
+  process.exit(1)
+}
 
 // Counters, held events and vetoes survive restarts (see state.ts).
 const state_path = env('CINDERELLA_STATE', './cinderella.state.json')
@@ -47,6 +58,8 @@ const policy = new Policy(cfg, {
   on_change : s => save_policy_state(state_path, s),
   ...(veto ? veto.policy_options() : {})
 })
+// Without veto: forget the veto key, so re-enabling it (even the same key) re-alerts held events.
+if (!veto) mark_veto_disabled(policy)
 
 const group  = decode_group_package(env('CINDERELLA_GROUP'))
 const share  = decode_share_package(env('CINDERELLA_SHARE'))

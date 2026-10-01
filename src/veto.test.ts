@@ -12,12 +12,17 @@
  *     the event is refused after its unlock
  *  3. a veto from another npub, a forged seal: no effect, not recorded as seen
  *  4. unknown and already-signed ids are ignored (with a reply)
- *  5. catch-up counts only with a live relay that sent a real EOSE
- *  6. all relays drop: not caught up, unlocked held events refused, the
- *     catch-up point stays put; relays back: resubscribed, vetoes work again
- *  7. veto key changed: delays restart from the new key's alert
+ *  5. catch-up counts only with a live relay that sent a real EOSE; alerts
+ *     that reach no relay: the delay never starts (fail-closed)
+ *  6. ONE alert relay drops: not caught up (every relay must be), only the
+ *     live relay's catch-up point moves; all drop and come back: resubscribed,
+ *     vetoes work again
+ *  7. veto key changed: delays restart from the new key's alert, which counts
+ *     as delivered only once one of that key's kind 10050 inbox relays took it
  *  8. veto enabled on a node that already holds events: alerted, delays restart
- *  9. alerts that reach no relay: the delay never starts (fail-closed)
+ *  9. veto turned off and on again with the SAME key: re-alerted, delays restart
+ * 10. malformed events and a throwing handler: logged, the node keeps running
+ * 11. node_count above 1 without peer_alert_pubkeys: refused
  */
 
 import { mkdtempSync } from 'node:fs'
@@ -33,7 +38,7 @@ import { cinderella_sign }   from './request.js'
 import { close_node, single_flight_pings } from './resync.js'
 import { load_policy_state, save_policy_state } from './state.js'
 import { load_or_create_alert_key, wrap_group } from './alerts.js'
-import { VetoController, resolve_veto_config, unwrap_verified } from './veto.js'
+import { VetoController, mark_veto_disabled, resolve_veto_config, unwrap_verified } from './veto.js'
 import { TestRelay }         from './test/relay.js'
 
 const assert = (c : boolean, m : string) => { console.log(c ? '  ok  ' : '  FAIL', m); if (!c) process.exitCode = 1 }
@@ -52,6 +57,7 @@ const alert_relays = [ r1.url, r2.url ]
 const port_of = (url : string) => Number(new URL(url).port)
 
 const { group, shares } = Lib.generate_dealer_package(2, 3)
+const logs : string[] = []
 const opts    = { node_config: { msg_timeout: 2000, sub_timeout: 2000 } }
 const DELAY_H = 0.001                                    // 3.6 s
 const DELAY_MS = DELAY_H * 3_600_000
@@ -72,7 +78,7 @@ const cfg_for = (veto_pk : Uint8Array, peers : string[], relays = alert_relays) 
 // A share node exactly as node.ts wires it.
 async function start_node (share : typeof shares[number], p : { state : string, key : string }, veto_pk : Uint8Array, peers : string[], relays = alert_relays) {
   const cfg    = cfg_for(veto_pk, peers, relays)
-  const veto   = new VetoController({ config: resolve_veto_config(cfg.veto!), key: load_or_create_alert_key(p.key), retry_ms: 1000, backoff_ms: { min: 200, max: 1000 } })
+  const veto   = new VetoController({ config: resolve_veto_config(cfg.veto!), key: load_or_create_alert_key(p.key), retry_ms: 1000, backoff_ms: { min: 200, max: 1000 }, log: (l, m) => logs.push(`${l}: ${m}`) })
   const policy = new Policy(cfg, { state: load_policy_state(p.state), on_change: s => save_policy_state(p.state, s), ...veto.policy_options() })
   const node   = create_share_node(group, share, [ r0.url ], policy, () => {}, opts)
   await veto.start(policy)
@@ -181,6 +187,7 @@ try {
   assert(!dead.veto.ready,                                            'no relay reachable: never counts as caught up')
   const blocked = event_of(profile('blocked'))
   dead.policy.evaluate(blocked)
+  await sleep(1500)
   assert(dead.policy.held()[0]?.[1].unlock === null,                  'alert reached no relay: delay not started (fail-closed)')
   assert(!dead.policy.evaluate(blocked, Date.now() + 3_600_000).ok,   'nothing signed, even long after')
   await stop_node(dead)
@@ -191,13 +198,24 @@ try {
   await until(() => a.policy.held().find(([ id ]) => id === third.id)?.[1].unlock !== null)
   await sleep(DELAY_MS + 200)
   assert(a.veto.ready,                                                'caught up before the drop')
+  const points = () => ({ ...(a.policy.get_meta<Record<string, number>>('veto_seen_until') ?? {}) })
+  await r2.close()
+  assert(await until(() => !a.veto.ready),                            'ONE alert relay gone: not caught up (every relay must be)')
+  const one = a.policy.evaluate(third)
+  assert(!one.ok && one.reason.includes('catching up'),               'unlocked held event refused while one relay is down')
+  const before_one = points()
+  await sleep(2500)
+  const after_one = points()
+  assert(after_one[r1.url]! > before_one[r1.url]! && after_one[r2.url] === before_one[r2.url], 'the live relay\'s catch-up point moves, the dead one\'s stays')
+  await r2.start(port_of(alert_relays[1]!))
+  assert(await until(() => a.veto.ready, 15_000),                     'relay back: caught up again')
   await r1.close(); await r2.close()
   assert(await until(() => !a.veto.ready),                            'all relays gone: not caught up')
-  const seen_until_at_drop = a.policy.get_meta<number>('veto_seen_until')!
+  const seen_until_at_drop = JSON.stringify(points())
   const during = a.policy.evaluate(third)
   assert(!during.ok && during.reason.includes('catching up'),         'unlocked held event refused while there is no live feed')
   await sleep(2500)
-  assert(a.policy.get_meta<number>('veto_seen_until') === seen_until_at_drop, 'catch-up point not advanced without a live subscription')
+  assert(JSON.stringify(points()) === seen_until_at_drop,             'catch-up points not advanced without a live subscription')
   await r1.start(port_of(alert_relays[0]!)); await r2.start(port_of(alert_relays[1]!))
   assert(await until(() => a.veto.ready, 15_000),                     'relays back: resubscribed and caught up again')
   await reply(phone, [ a_pk, b_pk ], `veto ${third.id}`)
@@ -210,9 +228,13 @@ try {
   const old_unlock = a.policy.held().find(([ id ]) => id === fourth.id)![1].unlock!
   await stop_node(a)
   const phone2_inbox = inbox(phone2, alert_relays)
-  const t_rotate = Date.now()
   a = await start_node(shares[1], A, phone2, [ b_pk ])
   assert(await until(() => phone2_inbox.msgs.some(m => m.content.includes(`veto ${fourth.id}`))), 'new key got the alert for the held event')
+  await sleep(2500)                                                    // a few retries
+  assert(a.policy.held().find(([ id ]) => id === fourth.id)![1].unlock === null, 'new key has no kind 10050 inbox list: not delivered, delay not started')
+  assert(logs.some(l => l.includes('no DM inbox list')),             'and the log says to publish one')
+  const t_rotate = Date.now()
+  await publish(alert_relays, finalizeEvent({ kind: 10050, created_at: now_s(), tags: [[ 'relay', r1.url ]], content: '' }, phone2))
   assert(await until(() => (a.policy.held().find(([ id ]) => id === fourth.id)?.[1].unlock ?? 0) >= t_rotate + DELAY_MS), 'its delay restarted from the new alert')
   assert(a.policy.held().find(([ id ]) => id === fourth.id)![1].unlock! > old_unlock, 'later than the old unlock')
   phone2_inbox.close()
@@ -229,6 +251,48 @@ try {
   assert(await until(() => (c.policy.held().find(([ id ]) => id === fifth.id)?.[1].unlock ?? 0) >= t_enable + DELAY_MS), 'and its delay restarted from that alert')
   assert(!c.policy.evaluate(fifth).ok,                                'so it is not signed although its old delay had passed')
   await stop_node(c)
+
+  console.log('9) veto off, then on again with the same key')
+  const off = new Policy({ version: 1, default_tier: 'deny', require_content: true, tiers }, { state: load_policy_state(C.state), on_change: s => save_policy_state(C.state, s) })
+  mark_veto_disabled(off)                                              // node.ts does this when the config has no veto
+  const sixth = event_of(profile('sixth'))
+  off.evaluate(sixth)                                                  // held while veto was off: unlock set at once
+  await sleep(DELAY_MS + 200)
+  const before_alerts = phone_inbox.msgs.filter(m => m.content.includes(`veto ${fifth.id}`)).length
+  const t_again = Date.now()
+  const c2 = await start_node(shares[1], C, phone, [])
+  assert(await until(() => phone_inbox.msgs.some(m => m.content.includes(`veto ${sixth.id}`))), 'the event held while veto was off was alerted')
+  assert(await until(() => phone_inbox.msgs.filter(m => m.content.includes(`veto ${fifth.id}`)).length > before_alerts), 'and the earlier held event was alerted again')
+  assert(await until(() => (c2.policy.held().find(([ id ]) => id === sixth.id)?.[1].unlock ?? 0) >= t_again + DELAY_MS), 'its delay restarted from the new alert')
+  assert(!c2.policy.evaluate(sixth).ok,                               'so it is not signed although its old delay had passed')
+  await stop_node(c2)
+
+  console.log('10) bad events from a relay never crash the node')
+  const n_logs = logs.length
+  r1.send_raw(null)
+  r1.send_raw('nope')
+  r1.send_raw({ id: 'zz' })
+  r1.send_raw({ id: 'ab'.repeat(32), pubkey: 'cd'.repeat(32), sig: 'ef'.repeat(64), kind: 1059, created_at: 1, tags: 'x', content: '' })
+  await sleep(500)
+  assert(logs.slice(n_logs).filter(l => l.includes('malformed event')).length >= 4, 'malformed events: logged and dropped before handle()')
+  const real_handle = a.veto.handle.bind(a.veto)
+  a.veto.handle = async () => { throw new Error('handler blew up') }
+  r1.send_raw({ id: 'ab'.repeat(32), pubkey: 'cd'.repeat(32), sig: 'ef'.repeat(64), kind: 1059, created_at: 1, tags: [], content: '' })
+  await sleep(500)
+  a.veto.handle = real_handle
+  assert(logs.some(l => l.includes('handler blew up')),               'a handler that throws: error logged, node still running')
+  const seventh = event_of(profile('seventh'))
+  a.policy.evaluate(seventh)
+  await until(() => a.policy.held().find(([ id ]) => id === seventh.id)?.[1].unlock !== null)
+  await reply(phone2, [ a_pk, b_pk ], `veto ${seventh.id}`)
+  assert(await until(() => !a.policy.held().some(([ id ]) => id === seventh.id)), 'and a veto afterwards still works')
+
+  console.log('11) more than one node needs the other nodes\' alert keys')
+  const refuse = (v : Record<string, unknown>) => { try { resolve_veto_config({ pubkey: getPublicKey(phone), alert_relays, ...v }); return '' } catch (e) { return String(e) } }
+  assert(refuse({ node_count: 2 }).includes('peer_alert_pubkeys'),   'node_count 2, no peers: refused')
+  assert(refuse({ node_count: 2, peer_alert_pubkeys: [] }).includes('peer_alert_pubkeys'), 'node_count 2, empty peers: refused')
+  assert(refuse({ node_count: 3, peer_alert_pubkeys: [ a_pk ] }).includes('peer_alert_pubkeys'), 'node_count 3, one peer: refused')
+  assert(refuse({ node_count: 2, peer_alert_pubkeys: [ a_pk ] }) === '' && refuse({}) === '', 'matching peers, or one node: fine')
 } catch (err) {
   console.log('  FAIL', 'unexpected error:', err)
   process.exitCode = 1

@@ -85,16 +85,22 @@ The node answers `vetoed …` and refuses that event for good, even after its un
 
 ### Setup
 
-1. **Phone:** create a new npub (the veto key) in a Nostr app with NIP-17 DMs and notifications.
+1. **Phone:** create a new npub (the veto key) in a Nostr app with NIP-17 DMs and notifications,
+   and make sure the app **publishes its DM inbox relays** (kind 10050; most NIP-17 apps do this in
+   their relay settings). Without that list no alert counts as delivered, so no delay ever starts.
 2. **Node config** (`cinderella.config.json`; not the env file with the share):
    ```json
    "veto": {
      "pubkey": "npub1…your veto key…",
      "alert_relays": [ "wss://hasky.chat", "wss://nos.lol" ],
      "gateway_pubkey": "npub1…the Gateway's notice key (optional)…",
-     "peer_alert_pubkeys": [ "npub1…the OTHER nodes' alert keys (with more than one node)…" ]
+     "node_count": 2,
+     "peer_alert_pubkeys": [ "npub1…the OTHER nodes' alert keys (node_count - 1 of them)…" ]
    }
    ```
+   `node_count` is how many Cinderella share nodes you run. With more than 1, `peer_alert_pubkeys`
+   must list exactly the other nodes' alert npubs, otherwise the node refuses to start (a veto reply
+   would not reach every node). Left out, it is 1 plus the number of `peer_alert_pubkeys`.
    At least **2** alert relays, otherwise the node refuses to start: use your own relay plus a public
    one, so a single blocked or compromised relay can't hide an alert or a veto.
 3. **Restart the node.** On first start it creates its **alert key** (`CINDERELLA_ALERT_KEY`,
@@ -113,15 +119,25 @@ phone gets them where it listens.
 - A veto must name the **exact 64-character id** of an event **this node is holding**. Vetoes for
   unknown or already-signed ids, or written **before** the event was held, are ignored (and you're
   told why), so old messages can't be replayed.
-- **Fail-closed alerts:** the delay starts only once at least one alert relay accepted the alert.
-  Until then the event stays held and the alert is retried every minute.
-- **Live veto feed:** the node counts as caught up only while at least one alert relay is connected
-  and has sent a real end-of-stored-events (EOSE) for its subscription. Until then, after a restart,
-  and whenever all relay connections drop, it refuses unlocked held events and reconnects. DMs wait on
-  the relays, and catch-up starts 2 days before the last time it was caught up (gift wraps carry
-  randomized timestamps).
-- **New veto key, or veto turned on later:** every event the node is already holding gets a new alert
-  to that key, and its delay **restarts** from that alert's delivery.
+- **Fail-closed alerts:** the delay starts only once at least one of the **veto key's own inbox
+  relays** (its kind 10050) accepted the alert: that is where your phone listens. A veto key without
+  an inbox list, or inbox relays that all refuse, means not delivered: the event stays held, the log
+  says why, and the alert is retried every minute (an empty inbox lookup is never cached, so
+  publishing the list fixes it on the next retry).
+- **Live veto feed, on EVERY alert relay:** the node counts as caught up only while **every** alert
+  relay is connected and has sent a real end-of-stored-events (EOSE) since its last reconnect, so a
+  veto that only one relay carries can't be missed. While any alert relay is down, after a restart,
+  or not yet caught up, the node refuses unlocked held events and reconnects (exponential backoff up
+  to 30 s, also when a relay keeps ending the subscription). A relay that sends nothing for 60 s,
+  not even an answer to the node's heartbeat, counts as down. Each relay has its own catch-up point,
+  which moves only while that relay is live; after a gap it re-reads from 2 days before that point
+  (gift wraps carry randomized timestamps), and DMs wait on the relays meanwhile.
+- **New veto key, veto turned on later, or turned off and on again (even with the same key):** every
+  event the node is holding gets a new alert to the veto key, and its delay **restarts** from that
+  alert's delivery.
+- A malformed event from a relay is logged and dropped; an error while handling one is logged; the
+  node never crashes on relay input. Needs **Node 22 or newer** (built-in WebSocket); older versions
+  stop with a clear error.
 - With several share nodes, give each one the same veto key and alert relays: every node enforces its
   own vetoes, and the group DM makes one reply reach all of them.
 
@@ -147,7 +163,8 @@ See `cinderella.config.json`. Unknown kinds hit `default_tier: "deny"`.
 npm test            # unit + e2e
 npm run test:e2e    # throwaway 2-of-3 group, real bifrost nodes, in-process relay
 npm run test:restart  # nonce resync after requester / share node restarts, refusal nonce spend
-npm run test:veto     # alerts and vetoes: two local relays, a test phone, offline catch-up, key rotation
+npm run test:veto     # alerts and vetoes: local relays, a test phone, offline catch-up, key rotation
+npm run test:feed     # veto feed: every relay caught up, idle timeout, backoff, crash guard
 ```
 
 ## Roadmap

@@ -35,6 +35,7 @@ export interface ResolvedVetoConfig {
   alert_relays       : string[]
   gateway_pubkey     : string | null
   peer_alert_pubkeys : string[]
+  node_count         : number
 }
 
 /** Validate the `veto` section of cinderella.config.json. Throws with a clear message. */
@@ -46,12 +47,39 @@ export function resolve_veto_config (cfg : VetoConfig) : ResolvedVetoConfig {
   if (relays.length < 2) {
     throw new Error('cinderella: veto.alert_relays needs at least 2 relays (e.g. your own and a public one), so one blocked relay cannot hide an alert')
   }
+  const peers = Array.from(new Set((cfg.peer_alert_pubkeys ?? []).map(pk => to_hex_pubkey(pk, 'veto.peer_alert_pubkeys'))))
+  // Not set: this node plus the peers it lists. Set: the peers must match it.
+  const node_count = cfg.node_count ?? peers.length + 1
+  if (!Number.isInteger(node_count) || node_count < 1) throw new Error('cinderella: veto.node_count must be a whole number of Cinderella share nodes (1 or more)')
+  if (peers.length !== node_count - 1) {
+    throw new Error(`cinderella: veto.node_count is ${node_count}, so veto.peer_alert_pubkeys needs the alert npubs of the other ${node_count - 1} node(s) (got ${peers.length}); otherwise one veto reply would not reach every node`)
+  }
   return {
+    node_count,
     veto_pubkey    : to_hex_pubkey(cfg.pubkey ?? '', 'veto.pubkey'),
     alert_relays   : relays,
     gateway_pubkey : cfg.gateway_pubkey ? to_hex_pubkey(cfg.gateway_pubkey, 'veto.gateway_pubkey') : null,
-    peer_alert_pubkeys : Array.from(new Set((cfg.peer_alert_pubkeys ?? []).map(pk => to_hex_pubkey(pk, 'veto.peer_alert_pubkeys'))))
+    peer_alert_pubkeys : peers
   }
+}
+
+/** A relay can send anything: only a well-formed Nostr event goes on to handle(). */
+export function is_event_shape (ev : unknown) : ev is NostrToolsEvent {
+  if (!ev || typeof ev !== 'object' || Array.isArray(ev)) return false
+  const e = ev as Record<string, unknown>
+  return typeof e.id === 'string' && /^[0-9a-f]{64}$/.test(e.id)
+    && typeof e.pubkey === 'string' && /^[0-9a-f]{64}$/.test(e.pubkey)
+    && typeof e.sig === 'string' && /^[0-9a-f]{128}$/.test(e.sig)
+    && Number.isInteger(e.kind) && Number.isInteger(e.created_at)
+    && Array.isArray(e.tags) && typeof e.content === 'string'
+}
+
+/**
+ * The node runs without veto: forget the veto key, so turning veto on again
+ * (even with the same key) re-alerts every held event and restarts its delay.
+ */
+export function mark_veto_disabled (policy : Policy) : void {
+  if (policy.get_meta<string | null>('veto_pubkey')) policy.set_meta('veto_pubkey', null)
 }
 
 /** `veto <64-hex id>`, nothing else. */
@@ -108,6 +136,8 @@ export interface VetoControllerOptions {
   retry_ms?   : number
   /** Reconnect backoff for the veto feed (tests use short values). */
   backoff_ms? : { min : number, max : number }
+  /** No traffic from a relay for this long = dead connection (default 60 s). */
+  idle_ms?    : number
 }
 
 export class VetoController {
@@ -124,8 +154,8 @@ export class VetoController {
 
   get alert_pubkey () : string { return getPublicKey(this.opts.key.sk) }
 
-  /** Caught up: at least one relay connected and past a real EOSE, right now. */
-  get ready () : boolean { return this.feed?.caught_up ?? false }
+  /** Caught up: EVERY alert relay connected and past a real EOSE since its last reconnect. */
+  get ready () : boolean { return this.feed?.all_caught_up ?? false }
 
   /** The group every alert and reply goes to: the veto key plus the other nodes. */
   private get members () : string[] {
@@ -141,17 +171,28 @@ export class VetoController {
     }
   }
 
-  /** Send the alert for one held event; on delivery to the veto key its delay starts. */
+  /**
+   * Send the alert for one held event. Its delay starts only when one of the
+   * veto key's own DM inbox relays (its kind 10050) accepted it: that is
+   * where the phone listens. No inbox list = not delivered, retried.
+   */
   async alert (id : string, entry : HeldEntry) : Promise<boolean> {
+    const veto    = this.opts.config.veto_pubkey
     const results = await this.channel.send_group(this.members, alert_text(id, entry))
-    const to_veto = results.get(this.opts.config.veto_pubkey)
-    if (!to_veto || to_veto.accepted.length === 0) {
+    const inbox   = await this.channel.inbox_relays(veto)
+    const to_veto = results.get(veto)
+    const hit     = (to_veto?.accepted ?? []).filter(r => inbox.includes(r))
+    if (!inbox.length) {
+      this.log('deny', `veto alert for ${id.slice(0, 8)} not delivered: the veto key has no DM inbox list (kind 10050); publish one from your phone app. Retrying`)
+      return false
+    }
+    if (!hit.length) {
       const why = to_veto ? Object.entries(to_veto.failed).map(([ r, e ]) => `${r}: ${e}`).join('; ') : 'not sent'
-      this.log('deny', `veto alert for ${id.slice(0, 8)} not delivered (${why}); retrying`)
+      this.log('deny', `veto alert for ${id.slice(0, 8)} not accepted by any of the veto key's inbox relays (${inbox.join(', ')}; ${why}); retrying`)
       return false
     }
     if (this.policy?.alert_delivered(id)) {
-      this.log('info', `veto alert for ${id.slice(0, 8)} delivered to ${to_veto.accepted.join(', ')}; delay started`)
+      this.log('info', `veto alert for ${id.slice(0, 8)} delivered to the veto key's inbox (${hit.join(', ')}); delay started`)
     }
     return true
   }
@@ -181,30 +222,44 @@ export class VetoController {
         : 'veto alerts are now on for this node. Held events follow; their delays restart.')
     }
 
-    // Live veto feed. `since` follows what was seen while caught up, minus the gift-wrap jitter.
+    // Live veto feed, with a catch-up point per relay: each relay's `since` follows what
+    // THAT relay was seen to deliver, minus the gift-wrap jitter.
+    const seen_until = () : Record<string, number> => {
+      const v = policy.get_meta<number | Record<string, number>>('veto_seen_until')
+      if (typeof v === 'number') return Object.fromEntries(this.opts.config.alert_relays.map(r => [ r, v ]))   // older single point
+      return v && typeof v === 'object' ? { ...v } : {}
+    }
+    const advance = (relays : string[]) => {
+      if (!relays.length) return
+      const now = Date.now(), next = seen_until()
+      for (const r of relays) next[r] = now
+      policy.set_meta('veto_seen_until', next, now)
+    }
     this.feed = new RelayFeed(this.opts.config.alert_relays, {
-      filter : () => {
-        const seen_until = policy.get_meta<number>('veto_seen_until') ?? Date.now()
-        return { kinds: [ 1059 ], '#p': [ this.alert_pubkey ], since: Math.floor(seen_until / 1000) - WRAP_JITTER_S - 60 }
+      filter : (relay) => {
+        const seen = seen_until()
+        const from = seen[relay] ?? (Object.values(seen).length ? Math.min(...Object.values(seen)) : Date.now())
+        return { kinds: [ 1059 ], '#p': [ this.alert_pubkey ], since: Math.floor(from / 1000) - WRAP_JITTER_S - 60 }
       },
-      onevent : (ev : NostrToolsEvent) => { void this.handle(ev) },
-      onstate : (caught_up) => {
-        if (caught_up) {
-          policy.set_meta('veto_seen_until', Date.now())
-          this.log('info', `veto feed caught up (${this.feed?.live.join(', ')})`)
-        } else {
-          this.log('deny', 'veto feed: no live relay; refusing unlocked held events until it is back')
-        }
+      onevent : (ev, relay) => {
+        if (!is_event_shape(ev)) { this.log('deny', `veto feed: ignored a malformed event from ${relay}`); return }
+        this.handle(ev).catch(err => this.log('deny', `veto feed: error handling an event from ${relay}: ${err instanceof Error ? err.message : String(err)}`))
+      },
+      oncaughtup : (relay) => advance([ relay ]),
+      onstate : (all) => {
+        if (all) this.log('info', 'veto feed caught up on every alert relay')
+        else this.log('deny', `veto feed: not every alert relay is live and caught up (${this.feed?.caught_up_relays.join(', ') || 'none'}); refusing unlocked held events`)
       },
       min_backoff_ms : this.opts.backoff_ms?.min,
       max_backoff_ms : this.opts.backoff_ms?.max,
+      idle_ms        : this.opts.idle_ms,
     })
     this.feed.start()
 
-    // Retry undelivered alerts; advance the catch-up point only while live.
+    // Retry undelivered alerts; advance each relay's catch-up point only while it is live.
     this.timer = setInterval(() => {
       for (const [ id, entry ] of policy.held()) if (entry.unlock === null) void this.alert(id, entry)
-      if (this.ready) policy.set_meta('veto_seen_until', Date.now())
+      advance(this.feed?.caught_up_relays ?? [])
     }, this.opts.retry_ms ?? RETRY_INTERVAL_MS)
     if (typeof this.timer.unref === 'function') this.timer.unref()
 

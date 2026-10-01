@@ -98,7 +98,11 @@ export class AlertChannel {
     return this.publish_to(this.relays, event)
   }
 
-  /** A pubkey's NIP-17 DM inbox relays (kind 10050), looked up on our relays, cached. */
+  /**
+   * A pubkey's NIP-17 DM inbox relays (kind 10050), looked up on our relays.
+   * Only a non-empty result is cached, so an inbox list published later is
+   * picked up on the next try.
+   */
   async inbox_relays (pubkey : string) : Promise<string[]> {
     const cached = this.inboxes.get(pubkey)
     if (cached && Date.now() - cached.at < INBOX_TTL_MS) return cached.relays
@@ -110,7 +114,8 @@ export class AlertChannel {
         .filter(t => t[0] === 'relay' && typeof t[1] === 'string' && /^wss?:\/\/\S+$/.test(t[1]))
         .map(t => t[1]!)
     } catch { /* none found: our relays only */ }
-    this.inboxes.set(pubkey, { relays, at: Date.now() })
+    if (relays.length) this.inboxes.set(pubkey, { relays, at: Date.now() })
+    else this.inboxes.delete(pubkey)
     return relays
   }
 
