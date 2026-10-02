@@ -9,6 +9,7 @@
 
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { SimplePool, finalizeEvent, generateSecretKey, getPublicKey, nip17, nip19, nip59 } from 'nostr-tools'
+import { normalizeURL } from 'nostr-tools/utils'
 import type { Event as NostrToolsEvent } from 'nostr-tools'
 import { bytesToHex, hexToBytes } from '@noble/hashes/utils'
 import type { HeldEntry } from './policy.js'
@@ -45,6 +46,21 @@ export function to_hex_pubkey (value : string, what : string) : string {
   throw new Error(`cinderella: ${what} must be an npub or a 64-hex pubkey`)
 }
 
+/**
+ * A relay URL as nostr-tools' pool keys it (`wss://nos.lol` and `wss://nos.lol/`
+ * are the same relay), or null if it isn't a ws:// or wss:// URL.
+ */
+export function normalize_relay (url : string) : string | null {
+  const u = url.trim()
+  if (!/^wss?:\/\/\S+$/i.test(u)) return null
+  try { return normalizeURL(u) } catch { return null }
+}
+
+/** Normalized and deduplicated; invalid URLs dropped. */
+export function normalize_relays (urls : string[]) : string[] {
+  return Array.from(new Set(urls.map(normalize_relay).filter((u) : u is string => u !== null)))
+}
+
 export interface SendResult {
   accepted : string[]
   failed   : Record<string, string>
@@ -77,12 +93,15 @@ export class AlertChannel {
   readonly pool = new SimplePool()
   private readonly inboxes = new Map<string, { relays : string[], at : number }>()
 
-  constructor (
-    private readonly key    : AlertKey,
-    readonly relays         : string[]
-  ) {}
+  readonly relays : string[]
 
-  private async publish_to (relays : string[], event : Parameters<SimplePool['publish']>[1]) : Promise<SendResult> {
+  constructor (private readonly key : AlertKey, relays : string[]) {
+    this.relays = normalize_relays(relays)
+  }
+
+  /** Results are keyed by normalized URL, so they compare with inbox_relays(). */
+  private async publish_to (urls : string[], event : Parameters<SimplePool['publish']>[1]) : Promise<SendResult> {
+    const relays  = normalize_relays(urls)
     const results = await Promise.allSettled(this.pool.publish(relays, event).map(p => within(p, PUBLISH_TIMEOUT_MS)))
     const accepted : string[] = []
     const failed : Record<string, string> = {}
@@ -110,18 +129,18 @@ export class AlertChannel {
     try {
       const events = await within(this.pool.querySync(this.relays, { kinds: [ 10050 ], authors: [ pubkey ] }, { maxWait: 5_000 }), 6_000)
       const newest = events.sort((a, b) => b.created_at - a.created_at)[0]
-      relays = (newest?.tags ?? [])
-        .filter(t => t[0] === 'relay' && typeof t[1] === 'string' && /^wss?:\/\/\S+$/.test(t[1]))
-        .map(t => t[1]!)
+      relays = normalize_relays((newest?.tags ?? [])
+        .filter(t => t[0] === 'relay' && typeof t[1] === 'string')
+        .map(t => t[1]!))
     } catch { /* none found: our relays only */ }
     if (relays.length) this.inboxes.set(pubkey, { relays, at: Date.now() })
     else this.inboxes.delete(pubkey)
     return relays
   }
 
-  /** Our alert relays plus the recipient's inbox relays. */
+  /** Our alert relays plus the recipient's inbox relays (both normalized, so each relay once). */
   async relays_for (pubkey : string) : Promise<string[]> {
-    return Array.from(new Set([ ...this.relays, ...(await this.inbox_relays(pubkey)) ]))
+    return normalize_relays([ ...this.relays, ...(await this.inbox_relays(pubkey)) ])
   }
 
   /** NIP-17 private message to `to` (hex pubkey), also to its inbox relays. */

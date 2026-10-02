@@ -37,7 +37,7 @@ import { create_share_node } from './share-node.js'
 import { cinderella_sign }   from './request.js'
 import { close_node, single_flight_pings } from './resync.js'
 import { load_policy_state, save_policy_state } from './state.js'
-import { load_or_create_alert_key, wrap_group } from './alerts.js'
+import { load_or_create_alert_key, normalize_relay, wrap_group } from './alerts.js'
 import { VetoController, mark_veto_disabled, resolve_veto_config, unwrap_verified } from './veto.js'
 import { TestRelay }         from './test/relay.js'
 
@@ -206,7 +206,8 @@ try {
   const before_one = points()
   await sleep(2500)
   const after_one = points()
-  assert(after_one[r1.url]! > before_one[r1.url]! && after_one[r2.url] === before_one[r2.url], 'the live relay\'s catch-up point moves, the dead one\'s stays')
+  const k1 = normalize_relay(r1.url)!, k2 = normalize_relay(r2.url)!     // catch-up points are keyed by normalized URL
+  assert(after_one[k1]! > before_one[k1]! && after_one[k2] === before_one[k2], 'the live relay\'s catch-up point moves, the dead one\'s stays')
   await r2.start(port_of(alert_relays[1]!))
   assert(await until(() => a.veto.ready, 15_000),                     'relay back: caught up again')
   await r1.close(); await r2.close()
