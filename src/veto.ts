@@ -25,7 +25,7 @@
 import { getEventHash, getPublicKey, nip44, verifyEvent } from 'nostr-tools'
 import type { Event as NostrToolsEvent } from 'nostr-tools'
 import type { HeldEntry, Policy, PolicyOptions, VetoConfig, VetoResult } from './policy.js'
-import { AlertChannel, alert_text, to_hex_pubkey, type AlertKey } from './alerts.js'
+import { AlertChannel, alert_text, normalize_relay, normalize_relays, to_hex_pubkey, type AlertKey } from './alerts.js'
 import { RelayFeed } from './relay-feed.js'
 
 export type VetoLog = (level : 'info' | 'deny' | 'allow', msg : string) => void
@@ -41,9 +41,11 @@ export interface ResolvedVetoConfig {
 /** Validate the `veto` section of cinderella.config.json. Throws with a clear message. */
 export function resolve_veto_config (cfg : VetoConfig) : ResolvedVetoConfig {
   if (!cfg || typeof cfg !== 'object') throw new Error('cinderella: veto config missing')
-  const relays = Array.from(new Set((cfg.alert_relays ?? []).map(r => String(r).trim()).filter(Boolean)))
-  const bad = relays.filter(r => !/^wss?:\/\/[^\s]+$/.test(r))
+  const raw = (cfg.alert_relays ?? []).map(r => String(r).trim()).filter(Boolean)
+  const bad = raw.filter(r => normalize_relay(r) === null)
   if (bad.length) throw new Error(`cinderella: veto.alert_relays must be ws:// or wss:// URLs (got ${bad.join(', ')})`)
+  // Normalized like nostr-tools' pool: wss://nos.lol and wss://nos.lol/ are one relay.
+  const relays = normalize_relays(raw)
   if (relays.length < 2) {
     throw new Error('cinderella: veto.alert_relays needs at least 2 relays (e.g. your own and a public one), so one blocked relay cannot hide an alert')
   }
@@ -256,7 +258,13 @@ export class VetoController {
     const seen_until = () : Record<string, number> => {
       const v = policy.get_meta<number | Record<string, number>>('veto_seen_until')
       if (typeof v === 'number') return Object.fromEntries(this.opts.config.alert_relays.map(r => [ r, v ]))   // older single point
-      return v && typeof v === 'object' ? { ...v } : {}
+      // Keys saved before relay URLs were normalized; two spellings of one relay keep the earlier point.
+      const out : Record<string, number> = {}
+      for (const [ r, at ] of Object.entries(v && typeof v === 'object' ? v : {})) {
+        const k = normalize_relay(r)
+        if (k !== null && typeof at === 'number') out[k] = Math.min(out[k] ?? at, at)
+      }
+      return out
     }
     const advance = (relays : string[]) => {
       if (!relays.length) return
