@@ -195,3 +195,42 @@ export async function close_node (node : BifrostNode) : Promise<void> {
   try { await node.close() } catch { /* expected on 2.0.2 */ }
   try { await (node.client as unknown as { close : () => unknown }).close() } catch { /* already closed */ }
 }
+
+/** Topic of the "I restarted: drop my nonces" notice (a bifrost event message). */
+export const RESET_TOPIC = 'cinderella/nonce-reset'
+
+/**
+ * Responder side: right after we (re)connect, tell every peer that any nonce
+ * it holds from us is dead (our pool lives in memory only). A requester that
+ * runs attach_requester_resync drops them at once, so its next signature
+ * pings us for a fresh batch first instead of failing on a stale nonce.
+ */
+export function announce_nonce_reset (node : BifrostNode, log : ResyncLog = () => {}) : void {
+  try {
+    const peers = node.peers.map(p => (p.pubkey.length === 66 ? p.pubkey.slice(2) : p.pubkey))
+    const client = node.client as unknown as { announce : (t : { topic : string, data : unknown }, peers : string[]) => Promise<unknown>[] }
+    for (const p of client.announce({ topic: RESET_TOPIC, data: { at: Date.now() } }, peers)) p.catch(() => {})
+    log(`resync: told ${peers.length} peer(s) to drop the nonces they hold from us`)
+  } catch (err) {
+    log(`resync: could not announce the nonce reset: ${err instanceof Error ? err.message : String(err)}`)
+  }
+}
+
+/**
+ * Requester side: a peer announced it restarted; drop every nonce we hold
+ * from it. The next signature then sees we can't sign with that peer and
+ * pings it first (ensure_nonces). Attach once, right after creating the node.
+ */
+export function attach_requester_resync (node : BifrostNode, log : ResyncLog = () => {}) : void {
+  node.on('message', (msg : any) => {
+    try {
+      if (msg?.type !== 'event' || msg?.topic !== RESET_TOPIC) return
+      const idx = member_idx(node, String(msg?.event?.pubkey ?? ''))
+      if (idx === undefined || idx === node.signer.idx) return
+      const n = discard_incoming(node, idx)
+      log(`resync: peer ${idx} restarted; dropped ${n} nonce(s) we held from it`)
+    } catch (err) {
+      log(`resync: reset handling failed: ${err instanceof Error ? err.message : String(err)}`)
+    }
+  })
+}

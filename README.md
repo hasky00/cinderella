@@ -36,8 +36,13 @@ import { cinderella_sign } from './src/request.js'
 const signed = await cinderella_sign(node, { kind: 1, created_at, tags: [], content: 'gm' })
 ```
 
-A share that refuses stays silent (bifrost sends no reject message), so a denied request
-shows up on the requester as a timeout (`sub_timeout`, 30s by default).
+A share that refuses answers at once with a reject message carrying the reason and a code
+(`src/refusal.ts`): `locked` (with this node's unlock time), `held` (the delay hasn't started yet,
+e.g. the veto alert isn't delivered), `catching_up`, `vetoed`, `rate_limited` (with when to retry),
+`denied`, or `nonce`. `cinderella_sign` throws a `SignRefusedError` with those refusals, so the
+Gateway can show "still locked until …" and retry at the right time instead of seeing "request
+timed out". (bifrost itself sends no reject; a share running older code, or one that is offline,
+still shows up as a timeout.)
 
 ## Run a share node
 
@@ -56,6 +61,17 @@ nonce of every refused request spent. Requesters must call `single_flight_pings(
 pings to the same peer are never in flight at once (a second one would discard the fresh batch the
 first just delivered). It only ever **discards** nonces — never persist and restore
 pool state: restoring a stale snapshot can reuse a nonce, which leaks that share.
+
+After a share node restarts, the requester still holds nonces that died with the node's memory.
+Two things now keep that from failing a signature:
+
+- On connect, the share node tells every peer to drop the nonces it holds from it (a bifrost
+  event message, `cinderella/nonce-reset`); a requester that runs `attach_requester_resync(node)`
+  does so, and its next signature pings for a fresh batch first.
+- If a round still reaches the node with a nonce it doesn't know (the notice was missed), the node
+  refuses with code `nonce` **before its policy runs**, so the round counts as nothing (an unlocked
+  held event stays unlocked, no rate-limit slot is used). `cinderella_sign` then drops that peer's
+  nonces, pings for fresh ones and runs the round once more.
 
 This reaches into bifrost internals, so `@frostr/bifrost` is pinned to exactly `2.0.2`.
 
@@ -176,6 +192,7 @@ See `cinderella.config.json`. Unknown kinds hit `default_tier: "deny"`.
 npm test            # unit + e2e
 npm run test:e2e    # throwaway 2-of-3 group, real bifrost nodes, in-process relay
 npm run test:restart  # nonce resync after requester / share node restarts, refusal nonce spend
+npm run test:refusal  # refusal reasons reach the requester; lost nonces: resync + one retry; restart notice
 npm run test:veto     # alerts and vetoes: local relays, a test phone, offline catch-up, key rotation
 npm run test:feed     # veto feed: every relay caught up, idle timeout, backoff, rejection guard
 npm run test:startup  # node.ts refuses bad veto setups (own key as peer, node_count vs group)

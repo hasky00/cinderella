@@ -1,15 +1,18 @@
 /**
- * Build a Cinderella share node: a bifrost signer with the policy middleware
- * and nonce resync attached. Used by node.ts and the tests, so both run the
- * exact same wiring.
+ * Build a Cinderella share node: a bifrost signer with the policy middleware,
+ * refusal replies and nonce resync attached. Used by node.ts and the tests, so
+ * both run the exact same wiring.
+ *
+ * On connect it tells every peer to drop the nonces it holds from us (our
+ * pool lives in memory, so after a restart they are all dead).
  */
 
 import { BifrostNode }              from '@frostr/bifrost'
 import type { BifrostNodeOptions, GroupPackage, SharePackage } from '@frostr/bifrost'
 import { Policy }                   from './policy.js'
-import { cinderella_middleware }    from './middleware.js'
+import { attach_refusal_replies, cinderella_middleware } from './middleware.js'
 import type { MiddlewareLogger }    from './middleware.js'
-import { attach_responder_resync }  from './resync.js'
+import { announce_nonce_reset, attach_responder_resync } from './resync.js'
 
 export function create_share_node (
   group   : GroupPackage,
@@ -24,5 +27,7 @@ export function create_share_node (
     middleware : { ...options.middleware, sign: cinderella_middleware(policy, log) }
   })
   attach_responder_resync(node, m => log('info', m))
+  attach_refusal_replies(node)
+  node.on('ready', () => announce_nonce_reset(node, m => log('info', m)))
   return node
 }
