@@ -87,6 +87,16 @@ Two things now keep that from failing a signature:
   held event stays unlocked, no rate-limit slot is used). `cinderella_sign` then drops that peer's
   nonces, pings for fresh ones and runs the round once more.
 
+- The relay replays bifrost's messages to a node that just connected. A node ignores every message
+  sent before it started (5 s clock-skew allowance) or older than 30 s, so after a restart it no
+  longer answers pings and sign requests nobody waits for (each stale ping used to hand out a nonce
+  batch the requester never stored).
+- The restart notice works both ways: when the Gateway restarts, a share node also drops the nonces
+  it counted as given to it.
+
+An event allowed after its delay stays allowed: if that signature fails (stale nonce, dropped reply)
+and the requester asks again, it passes at once, with no new delay, alert or rate-limit slot.
+
 This reaches into bifrost internals, so `@frostr/bifrost` is pinned to exactly `2.0.2`.
 
 ## State across restarts
@@ -207,6 +217,7 @@ npm test            # unit + e2e
 npm run test:e2e    # throwaway 2-of-3 group, real bifrost nodes, in-process relay
 npm run test:restart  # nonce resync after requester / share node restarts, refusal nonce spend
 npm run test:refusal  # refusal reasons reach the requester; lost nonces: resync + one retry; restart notice
+npm run test:stale    # replayed messages after a restart are ignored; Gateway restart notice; allowed stays allowed
 npm run test:watchdog # relay down at startup: retry; dead or silent connection: exit for the supervisor
 npm run test:veto     # alerts and vetoes: local relays, a test phone, offline catch-up, key rotation
 npm run test:feed     # veto feed: every relay caught up, idle timeout, backoff, rejection guard

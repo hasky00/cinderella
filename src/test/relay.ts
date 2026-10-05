@@ -32,6 +32,8 @@ export class TestRelay {
   // Test hooks for misbehaving relays.
   /** Keep connections open but never answer anything (a stalled relay). */
   frozen          = false
+  /** Store and replay ephemeral kinds (20000-29999) too, like the dry-run relay does. */
+  store_ephemeral = false
   /** Answer every REQ with CLOSED. */
   close_every_req = false
   /** Hang up right after each connection opens. */
@@ -81,7 +83,7 @@ export class TestRelay {
         const ev = msg[1] as Event
         // NIP-01: ephemeral kinds (20000-29999) are forwarded but never stored.
         // bifrost RPC uses kind 20000, so replaying them would be wrong.
-        if (ev.kind < 20000 || ev.kind >= 30000) this.events.push(ev)
+        if (this.store_ephemeral || ev.kind < 20000 || ev.kind >= 30000) this.events.push(ev)
         send([ 'OK', ev.id, true, '' ])
         for (const [ client, subs ] of this.subs) {
           for (const [ sid, filters ] of subs) {

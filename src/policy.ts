@@ -78,6 +78,12 @@ export interface HeldEntry {
   kind        : number
   delay_hours : number
   summary     : string
+  /**
+   * ms; when this node first allowed it after the delay. The signature may
+   * still have failed (a stale nonce, a dropped reply), so a re-request of the
+   * same event passes again: no new delay, no new alert, no new rate-limit slot.
+   */
+  allowed_at? : number
 }
 
 /** Everything a node must remember across restarts (see state.ts). */
@@ -238,6 +244,14 @@ export class Policy {
             : `queued: kind ${event.kind} unlocks at ${new Date(held.unlock).toISOString()}`
         }
       }
+      if (entry.allowed_at !== undefined) {
+        // Allowed before; the requester asks again because that signature failed.
+        if (this.opts.ready && !this.opts.ready()) {
+          return { ok: false, tier: name, code: 'catching_up', reason: 'held: catching up on vetoes first' }
+        }
+        this.changed(now)
+        return { ok: true, tier: name }
+      }
       if (entry.unlock === null) {
         return { ok: false, tier: name, code: 'held', unlock_at: null, reason: 'held: veto alert not delivered yet, so the delay has not started' }
       }
@@ -263,7 +277,9 @@ export class Policy {
     }
 
     if (delayed) {
-      this.pending.delete(event.id)
+      // Keep it: if this signature fails, a re-request must not start a new delay.
+      const entry = this.pending.get(event.id)
+      if (entry) entry.allowed_at = now
       this.signed.set(event.id, now)
     }
     this.changed(now)
@@ -278,12 +294,15 @@ export class Policy {
    */
   restart_delays (now = Date.now()) : number {
     const longest = Math.max(0, ...Object.values(this.cfg.tiers).map(t => t.delay_hours ?? 0))
+    let n = 0
     for (const entry of this.pending.values()) {
+      if (entry.allowed_at !== undefined) continue     // already allowed (and likely signed)
       if (!(entry.delay_hours > 0)) entry.delay_hours = longest
       entry.unlock = null
+      n += 1
     }
-    if (this.pending.size) this.changed(now)
-    return this.pending.size
+    if (n) this.changed(now)
+    return n
   }
 
   /** Veto mode: the alert for a held event reached a relay, so its delay starts now. */

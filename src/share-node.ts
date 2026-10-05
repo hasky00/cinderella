@@ -12,7 +12,7 @@ import type { BifrostNodeOptions, GroupPackage, SharePackage } from '@frostr/bif
 import { Policy }                   from './policy.js'
 import { attach_refusal_replies, cinderella_middleware } from './middleware.js'
 import type { MiddlewareLogger }    from './middleware.js'
-import { announce_nonce_reset, attach_responder_resync } from './resync.js'
+import { announce_nonce_reset, attach_nonce_reset, attach_responder_resync, ignore_stale_messages } from './resync.js'
 
 export function create_share_node (
   group   : GroupPackage,
@@ -26,7 +26,9 @@ export function create_share_node (
     ...options,
     middleware : { ...options.middleware, sign: cinderella_middleware(policy, log) }
   })
+  ignore_stale_messages(node)                       // no answering replayed pings / sign requests after a restart
   attach_responder_resync(node, m => log('info', m))
+  attach_nonce_reset(node, m => log('info', m))     // the Gateway restarted: our counts for it are stale too
   attach_refusal_replies(node)
   node.on('ready', () => announce_nonce_reset(node, m => log('info', m)))
   return node
