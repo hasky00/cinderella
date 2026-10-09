@@ -61,10 +61,12 @@ A share node must run under a supervisor that restarts it (launchd `KeepAlive`, 
   the network is back), the node logs `signing relay unreachable …; retrying in N s` and retries with
   backoff (2 s up to 60 s) instead of crashing.
 - **While running:** a watchdog sends a heartbeat on the node's own relay socket every 30 s
-  (`CINDERELLA_WATCHDOG_MS`) and checks at once after a clock jump (the machine slept). A closed or
-  silent connection never recovers by itself (bifrost's transport shuts down for good), so the node
-  logs `signing relay connection is dead (…)` and exits with code 1; the supervisor starts a fresh
-  one, which tells its peers to drop their stale nonces.
+  (`CINDERELLA_WATCHDOG_MS`) and checks at once after a clock jump (the machine slept). A closed
+  connection never recovers by itself (bifrost's transport shuts down for good), so the node logs
+  `signing relay connection is dead (…)` and exits with code 1; the supervisor starts a fresh one,
+  which tells its peers to drop their stale nonces. A heartbeat the relay doesn't answer within 15 s
+  is a miss: the node checks again 5 s later, and only two misses in a row count as dead (a relay
+  that is merely slow once doesn't restart the node).
 
 ## Nonces and restarts
 

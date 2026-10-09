@@ -113,6 +113,7 @@ const watchdog_ms = Number(process.env.CINDERELLA_WATCHDOG_MS) > 0 ? Number(proc
 watch_relay_link(node, {
   interval_ms : watchdog_ms,
   timeout_ms  : Math.min(15_000, Math.max(1_000, Math.floor(watchdog_ms / 2))),
+  recheck_ms  : Math.min(5_000, watchdog_ms),
   log     : m => log('info', m),
   on_dead : reason => {
     log('deny', `signing relay connection is dead (${reason}); exiting so the supervisor restarts the node`)
