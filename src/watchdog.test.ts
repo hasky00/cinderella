@@ -3,7 +3,9 @@
  * a connection that dies while the node runs (as after the Mac slept).
  *
  *  1. probe: a live socket passes; a relay that stops answering (socket still
- *     open) fails the heartbeat
+ *     open) fails the heartbeat; a slow answer within our timeout passes
+ *     (the transport's own 5 s limit used to fail it: 7 restarts on 9 Oct);
+ *     one missed heartbeat is rechecked, two in a row are death
  *  2. node.ts started while the relay is down: logs and retries, no crash;
  *     comes online once the relay is up
  *  3. node.ts running, relay drops the connection: exits with code 1 so the
@@ -17,7 +19,7 @@ import { tmpdir }      from 'node:os'
 import { join }        from 'node:path'
 import { BifrostNode, Lib } from '@frostr/bifrost'
 import { encode_group_package, encode_share_package } from '@frostr/bifrost/encoder'
-import { probe_relay_link } from './watchdog.js'
+import { probe_relay_link, watch_relay_link } from './watchdog.js'
 import { close_node }  from './resync.js'
 import { TestRelay }   from './test/relay.js'
 
@@ -67,7 +69,34 @@ try {
   const silent = await probe_relay_link(node, 1500)
   assert(typeof silent === 'string' && silent.includes('no answer'),   `relay stops answering: heartbeat fails (${silent})`)
   relay.frozen = false
+  relay.slow_heartbeat_ms = 3000                                       // longer than the transport's own 2 s here
+  const slow = await probe_relay_link(node, 6000)
+  relay.slow_heartbeat_ms = 0
+  assert(slow === null,                                                `a slow answer within our own timeout counts as alive (${slow})`)
+
+  console.log('1b) one missed heartbeat is not death; two in a row are')
+  const logs : string[] = []
+  let died = ''
+  const stop = watch_relay_link(node, { interval_ms: 1000, timeout_ms: 500, recheck_ms: 1000, log: m => logs.push(m), on_dead: r => { died = r } })
+  relay.frozen = true
+  assert(await until(() => logs.some(l => l.includes('heartbeat missed')), 5000), 'a missed heartbeat is logged and rechecked')
+  relay.frozen = false
+  await sleep(3000)
+  assert(died === '',                                                  `answered again: the node lives (${died})`)
+  relay.frozen = true
+  assert(await until(() => died !== '', 8000) && died.includes('twice in a row'), `two misses in a row: dead (${died})`)
+  relay.frozen = false
+  stop()
   await close_node(node)
+
+  // A socket that closed without the transport saying so: dead at once, not a "miss".
+  const closed_node = {
+    client : { is_ready: true, client: { sockets: [ { url: 'wss://gone.example', is_ready: false, subscribe: () => { throw new Error('closed') } } ] }, on: () => {}, off: () => {} },
+  } as unknown as BifrostNode
+  let closed_reason = ''
+  const stop_closed = watch_relay_link(closed_node, { interval_ms: 200, timeout_ms: 500, recheck_ms: 5000, on_dead: r => { closed_reason = r } })
+  assert(await until(() => closed_reason !== '', 2000) && !closed_reason.includes('twice'), `a closed socket is dead at the first heartbeat (${closed_reason})`)
+  stop_closed()
 
   console.log('2) startup while the relay is down')
   const port = Number(new URL(relay.url).port)

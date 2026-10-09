@@ -34,6 +34,8 @@ export class TestRelay {
   frozen          = false
   /** Store and replay ephemeral kinds (20000-29999) too, like the dry-run relay does. */
   store_ephemeral = false
+  /** Answer REQs for this id filter (the watchdog's heartbeat) this many ms late: a slow relay. */
+  slow_heartbeat_ms = 0
   /** Answer every REQ with CLOSED. */
   close_every_req = false
   /** Hang up right after each connection opens. */
@@ -104,7 +106,9 @@ export class TestRelay {
           if (f.limit !== undefined) hits = hits.slice(-f.limit)
           hits.forEach(ev => send([ 'EVENT', sid, ev ]))
         }
-        send([ 'EOSE', sid ])
+        const probe = filters.some(f => f.ids?.length === 1 && f.ids[0] === '0'.repeat(64))
+        if (probe && this.slow_heartbeat_ms > 0) setTimeout(() => send([ 'EOSE', sid ]), this.slow_heartbeat_ms)
+        else send([ 'EOSE', sid ])
         break
       }
       case 'CLOSE':

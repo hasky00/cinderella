@@ -8,8 +8,11 @@
  *
  * The watchdog probes the node's OWN socket (a fresh connection could work
  * while the node's is dead): every `interval_ms` it sends a tiny REQ on it
- * and needs the relay's EOSE within `timeout_ms`. A closed or silent socket,
- * or a node that reports itself closed, counts as dead. A clock jump bigger
+ * and needs the relay's EOSE within `timeout_ms`. A closed socket, or a node
+ * that reports itself closed, counts as dead at once. An unanswered heartbeat
+ * is a miss: it checks again after `recheck_ms`, and only two misses in a row
+ * count as dead (on 9 Oct a relay answering one heartbeat slowly restarted
+ * the node 7 times in a day). A clock jump bigger
  * than two intervals (the machine slept) triggers a probe at once. On death
  * it calls `on_dead` once; node.ts then exits so the supervisor (launchd
  * KeepAlive, systemd, Docker) starts a fresh node, which announces a nonce
@@ -23,15 +26,26 @@ import type { BifrostNode } from '@frostr/bifrost'
 export interface WatchdogOptions {
   interval_ms? : number
   timeout_ms?  : number
+  /** After a missed heartbeat, check again this soon (default 5 s). */
+  recheck_ms?  : number
   on_dead      : (reason : string) => void
   log?         : (msg : string) => void
+}
+
+interface Sub {
+  activate : () => Promise<unknown>
+  cancel   : () => void
+  once     : (event : string, fn : (reason? : unknown) => void) => void
 }
 
 interface Socket {
   url      : string
   is_ready : boolean
-  subscribe : (filters : unknown[]) => { activate : () => Promise<unknown>, cancel : () => void }
+  subscribe : (filters : unknown[]) => Sub
 }
+
+/** How an unanswered heartbeat reads (a miss, not a closed socket). */
+const NO_ANSWER = 'no answer in'
 
 function sockets (node : BifrostNode) : Socket[] {
   const transport = (node.client as unknown as { client? : { sockets? : Socket[] } }).client
@@ -45,7 +59,7 @@ function within<T> (p : Promise<T>, ms : number, what : string) : Promise<T> {
   let t : ReturnType<typeof setTimeout>
   return Promise.race([
     p.finally(() => clearTimeout(t)),
-    new Promise<T>((_, reject) => { t = setTimeout(() => reject(new Error(`${what}: no answer in ${ms} ms`)), ms) }),
+    new Promise<T>((_, reject) => { t = setTimeout(() => reject(new Error(`${what}: ${NO_ANSWER} ${ms} ms`)), ms) }),
   ])
 }
 
@@ -55,10 +69,17 @@ export async function probe_relay_link (node : BifrostNode, timeout_ms = 15_000)
   if (ready === false) return 'the signing node reports itself closed'
   for (const s of sockets(node)) {
     if (!s.is_ready) return `socket to ${s.url} is closed`
-    let sub : ReturnType<Socket['subscribe']> | undefined
+    let sub : Sub | undefined
     try {
       sub = s.subscribe([ { ids: [ '0'.repeat(64) ], limit: 1 } ])
-      await within(sub.activate(), timeout_ms, `heartbeat on ${s.url}`)
+      const answered = new Promise<void>((resolve, reject) => {
+        sub!.once('eose', () => resolve())
+        sub!.once('cancel', (reason) => reject(new Error(`heartbeat on ${s.url}: subscription closed (${String(reason)})`)))
+      })
+      // activate() sends the REQ but gives up after the transport's own msg_timeout
+      // (5 s by default); wait for the relay's EOSE with our own, longer timeout.
+      sub.activate().catch(() => { /* answered or timed out below */ })
+      await within(answered, timeout_ms, `heartbeat on ${s.url}`)
     } catch (err) {
       return err instanceof Error ? err.message : String(err)
     } finally {
@@ -72,7 +93,8 @@ export async function probe_relay_link (node : BifrostNode, timeout_ms = 15_000)
 export function watch_relay_link (node : BifrostNode, opts : WatchdogOptions) : () => void {
   const interval = opts.interval_ms ?? 30_000
   const timeout  = opts.timeout_ms  ?? 15_000
-  let dead = false, probing = false, last = Date.now()
+  const recheck  = opts.recheck_ms  ?? 5_000
+  let dead = false, probing = false, last = Date.now(), misses = 0
 
   const die = (reason : string) => {
     if (dead) return
@@ -85,7 +107,13 @@ export function watch_relay_link (node : BifrostNode, opts : WatchdogOptions) : 
     probing = true
     try {
       const reason = await probe_relay_link(node, timeout)
-      if (reason) die(reason)
+      if (!reason) { misses = 0; return }
+      if (!reason.includes(NO_ANSWER)) return die(reason)            // closed: dead at once
+      misses += 1
+      if (misses >= 2) return die(`${reason} (twice in a row)`)
+      opts.log?.(`watchdog: heartbeat missed (${reason}); checking again in ${Math.round(recheck / 1000)} s`)
+      const t = setTimeout(() => { void check() }, recheck)
+      t.unref?.()
     } catch (err) {
       die(err instanceof Error ? err.message : String(err))
     } finally {
