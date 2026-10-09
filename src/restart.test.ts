@@ -4,7 +4,7 @@
  * bifrost 2.0.2 keeps nonce pools in memory only. Without resync:
  *  A) after the requester restarts, it can never sign again;
  *  B) after a share node restarts, the requester burns its stale nonces
- *     one timeout at a time;
+ *     one timeout at a time (now: one 'nonce' refusal, resync, retry);
  *  C) every refusal leaks one of the share node's outgoing nonces;
  *  D) two pings in flight at once make the share node discard the fresh
  *     batch its first reply just delivered.
@@ -51,9 +51,9 @@ try {
   await close_node(cindy)
   cindy = mk_cindy()
   await cindy.connect()
-  const first  = await signs(gw)
-  const second = await signs(gw)
-  assert(second, `signs again after at most one failed attempt (first: ${first ? 'signed' : 'failed'}, second: ${second ? 'signed' : 'failed'})`)
+  // The requester still holds the old node's nonces: the node refuses with
+  // 'nonce', cinderella_sign resyncs and retries the round once (refusal.ts).
+  assert(await signs(gw), 'the first signature after the share node restarted succeeds')
   assert(await signs(gw), 'and keeps signing')
 
   console.log('C) refusals do not leak the share node\'s nonces')

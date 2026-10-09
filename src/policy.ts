@@ -12,6 +12,7 @@
  */
 
 import { summarize_event } from './summary.js'
+import type { RefusalCode } from './refusal.js'
 
 export interface RateLimit {
   max_events  : number
@@ -60,7 +61,15 @@ export interface NostrEvent {
 
 export type Verdict =
   | { ok : true,  tier : string }
-  | { ok : false, tier : string | null, reason : string }
+  | {
+      ok : false, tier : string | null, reason : string,
+      /** What kind of refusal, for the requester (see refusal.ts). */
+      code : RefusalCode,
+      /** ms; when this held event unlocks here, if known. */
+      unlock_at? : number | null,
+      /** ms; when a rate-limited request may pass. */
+      retry_at? : number | null
+    }
 
 /** A delay-gated event this node is holding. */
 export interface HeldEntry {
@@ -188,14 +197,14 @@ export class Policy {
    */
   evaluate (event : NostrEvent, now = Date.now()) : Verdict {
     if (this.vetoed.has(event.id)) {
-      return { ok: false, tier: this.tier_for(event.kind), reason: `vetoed: ${event.id.slice(0, 8)} was vetoed from the veto key` }
+      return { ok: false, tier: this.tier_for(event.kind), code: 'vetoed', reason: `vetoed: ${event.id.slice(0, 8)} was vetoed from the veto key` }
     }
 
     const name = this.tier_for(event.kind)
 
     if (name === null) {
       if (this.cfg.default_tier === 'deny') {
-        return { ok: false, tier: null, reason: `kind ${event.kind} not in any tier (default deny)` }
+        return { ok: false, tier: null, code: 'denied', reason: `kind ${event.kind} not in any tier (default deny)` }
       }
       return this.evaluate_tier(this.cfg.default_tier, event, now)
     }
@@ -205,7 +214,7 @@ export class Policy {
 
   private evaluate_tier (name : string, event : NostrEvent, now : number) : Verdict {
     const tier = this.cfg.tiers[name]
-    if (!tier) return { ok: false, tier: name, reason: `unknown tier ${name}` }
+    if (!tier) return { ok: false, tier: name, code: 'denied', reason: `unknown tier ${name}` }
 
     // 1. Delay gate (vault behaviour): first sighting holds, a later sighting after unlock passes.
     const delayed = !!(tier.delay_hours && tier.delay_hours > 0)
@@ -223,20 +232,20 @@ export class Policy {
         this.changed(now)
         this.opts.on_hold?.(event.id, held)
         return {
-          ok: false, tier: name,
+          ok: false, tier: name, code: 'held', unlock_at: held.unlock,
           reason: held.unlock === null
             ? `queued: kind ${event.kind} held; its ${tier.delay_hours}h delay starts when the veto alert is delivered`
             : `queued: kind ${event.kind} unlocks at ${new Date(held.unlock).toISOString()}`
         }
       }
       if (entry.unlock === null) {
-        return { ok: false, tier: name, reason: 'held: veto alert not delivered yet, so the delay has not started' }
+        return { ok: false, tier: name, code: 'held', unlock_at: null, reason: 'held: veto alert not delivered yet, so the delay has not started' }
       }
       if (now < entry.unlock) {
-        return { ok: false, tier: name, reason: `still locked until ${new Date(entry.unlock).toISOString()}` }
+        return { ok: false, tier: name, code: 'locked', unlock_at: entry.unlock, reason: `still locked until ${new Date(entry.unlock).toISOString()}` }
       }
       if (this.opts.ready && !this.opts.ready()) {
-        return { ok: false, tier: name, reason: 'held: catching up on vetoes first' }
+        return { ok: false, tier: name, code: 'catching_up', reason: 'held: catching up on vetoes first' }
       }
     }
 
@@ -247,7 +256,7 @@ export class Policy {
       const stamps = (this.history.get(name) ?? []).filter(t => now - t < window)
       if (stamps.length >= max_events) {
         this.history.set(name, stamps)
-        return { ok: false, tier: name, reason: `rate limit: ${max_events}/${per_minutes}min exceeded` }
+        return { ok: false, tier: name, code: 'rate_limited', retry_at: stamps[0]! + window, reason: `rate limit: ${max_events}/${per_minutes}min exceeded` }
       }
       stamps.push(now)
       this.history.set(name, stamps)
