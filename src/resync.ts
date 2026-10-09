@@ -202,7 +202,7 @@ export const RESET_TOPIC = 'cinderella/nonce-reset'
 /**
  * Responder side: right after we (re)connect, tell every peer that any nonce
  * it holds from us is dead (our pool lives in memory only). A requester that
- * runs attach_requester_resync drops them at once, so its next signature
+ * runs attach_nonce_reset drops them at once, so its next signature
  * pings us for a fresh batch first instead of failing on a stale nonce.
  */
 export function announce_nonce_reset (node : BifrostNode, log : ResyncLog = () => {}) : void {
@@ -217,20 +217,64 @@ export function announce_nonce_reset (node : BifrostNode, log : ResyncLog = () =
 }
 
 /**
- * Requester side: a peer announced it restarted; drop every nonce we hold
- * from it. The next signature then sees we can't sign with that peer and
- * pings it first (ensure_nonces). Attach once, right after creating the node.
+ * Either side: a peer announced it restarted (announce_nonce_reset). Its
+ * pools are gone, so every nonce between us is dead in BOTH directions: drop
+ * the ones we hold from it (or the next signature uses a dead one) and the
+ * ones we gave it (or our count says it still holds them, and the next ping
+ * from it won't make us send fresh ones). Attach once, right after creating
+ * the node: the Gateway (requester) and every share node (responder).
  */
-export function attach_requester_resync (node : BifrostNode, log : ResyncLog = () => {}) : void {
+export function attach_nonce_reset (node : BifrostNode, log : ResyncLog = () => {}) : void {
   node.on('message', (msg : any) => {
     try {
       if (msg?.type !== 'event' || msg?.topic !== RESET_TOPIC) return
       const idx = member_idx(node, String(msg?.event?.pubkey ?? ''))
       if (idx === undefined || idx === node.signer.idx) return
-      const n = discard_incoming(node, idx)
-      log(`resync: peer ${idx} restarted; dropped ${n} nonce(s) we held from it`)
+      const held = discard_incoming(node, idx)
+      const given = drop(node, '_outgoing', idx)
+      log(`resync: peer ${idx} restarted; dropped the ${held} nonce(s) we held from it and the ${given} we gave it`)
     } catch (err) {
       log(`resync: reset handling failed: ${err instanceof Error ? err.message : String(err)}`)
     }
   })
+}
+
+/** Older name of attach_nonce_reset (the Gateway's copy calls it). */
+export const attach_requester_resync = attach_nonce_reset
+
+/** bifrost messages older than this are ignored (see ignore_stale_messages). */
+export const STALE_MESSAGE_S = 30
+/** Clock skew allowed between machines for the "sent before we started" rule. */
+export const START_SKEW_S = 5
+
+/**
+ * The relay replays bifrost's messages (kind 20000) to a node that just
+ * subscribed, and bifrost's subscription has no `since`. Seen on node A
+ * (4-5 Oct): after every restart it answered 3-4 pings and a sign request
+ * the Gateway had sent minutes earlier and no longer waited for. Each stale
+ * ping made it hand out a fresh nonce batch the Gateway never stored, while
+ * it counted that batch as given; the Gateway kept signing with the nonces
+ * of the node's previous run ("failed to derive secret from nonce code").
+ *
+ * Drop every incoming bifrost message that was sent before this node started
+ * (beyond START_SKEW_S of clock skew): nobody is waiting for its answer, it
+ * was meant for the previous run. And drop anything older than `max_age_s`
+ * (default 30 s), e.g. replayed after a reconnect: a requester waits at most
+ * sub_timeout (15 s on the Gateway). Attach right after creating the node.
+ */
+export function ignore_stale_messages (node : BifrostNode, max_age_s = STALE_MESSAGE_S) : void {
+  const transport = node.client as unknown as { _filter? : (event : { created_at? : number }) => boolean }
+  const base = transport._filter
+  if (typeof base !== 'function') {
+    throw new Error('cinderella: bifrost client has no _filter — ignore_stale_messages needs updating for this nostr-sdk version')
+  }
+  const started = Math.floor(Date.now() / 1000)
+  transport._filter = function (event : { created_at? : number }) {
+    const at = event?.created_at
+    if (typeof at === 'number') {
+      if (at < started - START_SKEW_S) return false
+      if (at < Math.floor(Date.now() / 1000) - max_age_s) return false
+    }
+    return base.call(this, event)
+  }
 }

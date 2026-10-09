@@ -117,10 +117,11 @@ try {
   await attempt(later)
   await sleep(DELAY_MS + 300)
   drop_cindy_nonces()
+  const before_entry = { ...policy.held().find(([ , e ]) => e.summary.includes('later'))![1] }
   const unlocked = await attempt(later)
-  const later_id = policy.held().find(([ , e ]) => e.summary.includes('later'))
+  const after_entry = policy.held().find(([ , e ]) => e.summary.includes('later'))?.[1]
   assert(unlocked.ok,                                                   `unlocked held event signs despite the stale nonce (${unlocked.ok ? 'ok' : unlocked.message})`)
-  assert(later_id === undefined,                                        'and the node did not hold it a second time')
+  assert(after_entry?.allowed_at !== undefined && after_entry.unlock === before_entry.unlock, 'and the node did not hold it a second time (same unlock, now allowed)')
 
   console.log('4) a restarted share node tells the requester to drop its nonces')
   attach_requester_resync(gw)
