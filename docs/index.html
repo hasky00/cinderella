@@ -3,11 +3,24 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Cinderella — the slipper only fits one foot</title>
-<meta name="description" content="Policy-aware threshold signing for Nostr. Built on FROSTR.">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300;0,9..144,600;1,9..144,300;1,9..144,600&family=Karla:wght@400;500;600&display=swap" rel="stylesheet">
+<meta name="format-detection" content="telephone=no, email=no, address=no">
+<title>Cinderella — threshold signing for Nostr, with rules and a veto</title>
+<meta name="description" content="Threshold signing for Nostr, with rules and a veto. Built on FROSTR.">
+<link rel="preload" href="fonts/fraunces-latin.woff2" as="font" type="font/woff2" crossorigin>
 <style>
+  /* Self-hosted fonts (SIL Open Font License 1.1, see fonts/OFL-*.txt). No requests to Google. */
+  @font-face {
+    font-family: "Fraunces"; font-style: normal; font-weight: 300 600; font-display: swap;
+    src: url("fonts/fraunces-latin.woff2") format("woff2");
+  }
+  @font-face {
+    font-family: "Fraunces"; font-style: italic; font-weight: 300 600; font-display: swap;
+    src: url("fonts/fraunces-italic-latin.woff2") format("woff2");
+  }
+  @font-face {
+    font-family: "Karla"; font-style: normal; font-weight: 400 600; font-display: swap;
+    src: url("fonts/karla-latin.woff2") format("woff2");
+  }
   :root {
     --midnight: #0F1230;
     --velvet:   #1A1E45;
@@ -16,14 +29,18 @@
     --pumpkin:  #F2782E;
     --ivory:    #F5EFE6;
     --ivory-dim:#B9B4C8;
-    --display: "Fraunces", Georgia, serif;
-    --body: "Karla", system-ui, sans-serif;
+    --go:       #1f4a3d;
+    --wait:     #4a3a15;
+    --no:       #5a2a2a;
+    --display: "Fraunces", Georgia, "Times New Roman", serif;
+    --body: "Karla", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   }
   * { box-sizing: border-box; }
   html { scroll-behavior: smooth; }
   body {
     margin: 0; background: var(--midnight); color: var(--ivory);
     font-family: var(--body); font-size: 18px; line-height: 1.6;
+    -webkit-text-size-adjust: 100%;
     background-image:
       radial-gradient(1px 1px at 12% 18%, #fff8 0, transparent 100%),
       radial-gradient(1px 1px at 70% 9%, #fff6 0, transparent 100%),
@@ -33,29 +50,29 @@
       radial-gradient(1.5px 1.5px at 22% 86%, #fff6 0, transparent 100%),
       radial-gradient(1px 1px at 91% 78%, #fff5 0, transparent 100%);
   }
-  a { color: var(--gilt); }
-  a:focus-visible, button:focus-visible, select:focus-visible { outline: 3px solid var(--glass); outline-offset: 3px; }
-  main { max-width: 760px; margin: 0 auto; padding: 0 24px 96px; }
+  button:focus-visible, select:focus-visible { outline: 3px solid var(--glass); outline-offset: 3px; }
+  main { max-width: 760px; margin: 0 auto; padding: 0 24px 80px; }
 
   /* Hero */
-  header { padding: 72px 0 40px; text-align: left; }
+  header { padding: 72px 0 32px; }
   .clock { font-family: var(--display); font-weight: 300; font-size: 15px; letter-spacing: .04em; color: var(--ivory-dim); margin: 0 0 24px; }
   .clock b { color: var(--gilt); font-weight: 600; }
   h1 {
-    font-family: var(--display); font-weight: 300; font-style: italic;
-    font-size: clamp(44px, 9vw, 92px); line-height: .98; margin: 0 0 24px;
+    font-family: var(--display); font-weight: 600;
+    font-size: clamp(48px, 13vw, 92px); line-height: 1; margin: 0 0 16px;
     font-variation-settings: "opsz" 144;
   }
-  h1 span { display: block; font-style: normal; font-weight: 600; }
-  .lede { font-size: 21px; max-width: 34ch; margin: 0 0 32px; color: var(--ivory); }
-  .lede em { font-family: var(--display); font-size: 1.1em; color: var(--glass); }
-  .cta { display: inline-flex; gap: 14px; flex-wrap: wrap; }
-  .cta a {
-    text-decoration: none; padding: 12px 20px; border-radius: 999px; font-weight: 600;
-    background: var(--gilt); color: var(--midnight); transition: transform .15s;
+  .tagline {
+    font-family: var(--display); font-weight: 300; font-style: italic; font-size: clamp(22px, 5.4vw, 30px);
+    line-height: 1.3; color: var(--glass); margin: 0 0 20px; max-width: 28ch;
   }
-  .cta a.quiet { background: transparent; color: var(--ivory); border: 1px solid #ffffff33; }
-  .cta a:hover { transform: translateY(-1px); }
+  .lede { font-size: 20px; margin: 0 0 28px; max-width: 40ch; }
+  .status {
+    display: flex; gap: 12px; align-items: flex-start; max-width: 52ch;
+    padding: 14px 16px; border-radius: 14px; border: 1px solid #E2B85766; background: #E2B85714;
+    font-size: 16px; line-height: 1.5;
+  }
+  .status::before { content: ""; flex: 0 0 10px; height: 10px; margin-top: 7px; border-radius: 50%; background: var(--gilt); box-shadow: 0 0 0 4px #E2B85733; }
 
   /* Carriage */
   .road { position: relative; height: 150px; margin: 8px -24px 24px; overflow: hidden; border-bottom: 1px solid #ffffff22; }
@@ -71,30 +88,40 @@
   .carriage.midnight .pumpkin { opacity: 1; }
   .carriage.midnight .coach   { opacity: 0; }
   .hint { position: absolute; right: 24px; bottom: 14px; font-size: 14px; color: var(--ivory-dim); font-style: italic; font-family: var(--display); }
+  .hint .tap { display: none; }
   @media (prefers-reduced-motion: reduce) {
     .carriage { animation: none; left: calc(50% - 120px); }
     .carriage .wheel { animation: none; }
   }
+  /* Phone: smaller carriage, hint above it instead of on top of it */
+  @media (max-width: 560px) {
+    .road { height: 170px; }
+    .carriage { width: 190px; }
+    @keyframes roll { to { left: calc(50% - 95px); } }
+    .hint { top: 10px; bottom: auto; left: 24px; right: 24px; text-align: center; }
+    .hint .hover { display: none; }
+    .hint .tap { display: inline; }
+  }
+  @media (max-width: 560px) and (prefers-reduced-motion: reduce) {
+    .carriage { left: calc(50% - 95px); }
+  }
 
-  /* Story sections */
+  /* Sections */
   section { padding: 48px 0 8px; }
   h2 {
-    font-family: var(--display); font-weight: 600; font-size: 34px; line-height: 1.15;
+    font-family: var(--display); font-weight: 600; font-size: clamp(28px, 7vw, 34px); line-height: 1.15;
     margin: 0 0 16px; font-variation-settings: "opsz" 72;
   }
   h2 small { display: block; font-weight: 300; font-style: italic; font-size: 20px; color: var(--ivory-dim); margin-top: 4px; }
+  h3 { font-family: var(--display); font-weight: 600; font-size: 21px; line-height: 1.25; margin: 0 0 6px; }
   p { max-width: 62ch; margin: 0 0 16px; }
   .verse { font-family: var(--display); font-style: italic; font-size: 24px; line-height: 1.4; color: var(--glass); border-left: 3px solid var(--gilt); padding-left: 18px; margin: 28px 0; max-width: 40ch; }
-  code { font-family: ui-monospace, Menlo, monospace; font-size: .9em; background: #ffffff12; padding: 2px 6px; border-radius: 4px; }
-  pre { background: var(--velvet); padding: 18px 20px; border-radius: 12px; overflow: auto; font-size: 15px; line-height: 1.5; }
-  pre code { background: none; padding: 0; }
+  code { font-family: ui-monospace, Menlo, monospace; font-size: .9em; background: #ffffff12; padding: 2px 6px; border-radius: 4px; overflow-wrap: anywhere; }
 
-  /* Shares */
-  .shares { display: flex; gap: 18px; flex-wrap: wrap; margin: 24px 0 8px; }
-  .share { flex: 1 1 180px; padding: 18px; border-radius: 14px; background: var(--velvet); }
-  .share h3 { font-family: var(--display); font-weight: 600; font-size: 22px; margin: 0 0 6px; }
-  .share p { font-size: 15px; margin: 0; color: var(--ivory-dim); }
-  .share.cold { background: transparent; border: 1px dashed #ffffff44; }
+  /* Cards */
+  .cards { list-style: none; padding: 0; margin: 20px 0; display: grid; gap: 14px; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); }
+  .cards li { padding: 18px; border-radius: 14px; background: var(--velvet); }
+  .cards li p { font-size: 16px; margin: 0; color: var(--ivory-dim); }
 
   /* Slipper demo */
   .demo { background: linear-gradient(160deg, var(--velvet), #12163a); border-radius: 20px; padding: 28px; margin: 24px 0; border: 1px solid #ffffff14; }
@@ -115,21 +142,82 @@
   .verdict.idle { background: #ffffff0d; color: var(--ivory-dim); }
   .verdict b { display: block; font-family: var(--display); font-size: 21px; }
   .tally { font-size: 14px; color: var(--ivory-dim); margin-top: 10px; }
+  @media (max-width: 560px) {
+    .demo { padding: 20px 16px; margin: 20px -8px; }
+    .demo button { width: 100%; }
+    .verdict { padding: 14px; font-size: 16px; align-items: flex-start; }
+    .verdict .slipper { font-size: 26px; }
+  }
+
+  /* Flow diagram */
+  .flow { margin: 24px 0 8px; font-size: 16px; line-height: 1.35; }
+  .flow ol { list-style: none; margin: 0; padding: 0; }
+  .step {
+    position: relative; text-align: center; padding: 12px 14px; border-radius: 12px;
+    background: var(--velvet); border: 1px solid #ffffff1f;
+  }
+  .step small { display: block; color: var(--ivory-dim); font-size: 14px; }
+  .flow li + li { margin-top: 28px; }
+  .flow li + li::before {
+    content: ""; position: absolute; left: 50%; top: -24px; height: 20px; border-left: 2px solid var(--gilt); transform: translateX(-1px);
+  }
+  .flow li + li::after {
+    content: ""; position: absolute; left: 50%; top: -9px; border: 5px solid transparent; border-top-color: var(--gilt); transform: translateX(-5px);
+  }
+  .flow .main-line { max-width: 320px; margin: 0 auto; }
+  .step.check { border-color: var(--gilt); font-weight: 600; }
+  .branches { display: grid; gap: 16px; margin-top: 28px; grid-template-columns: 1fr; }
+  .branch { border-radius: 16px; padding: 14px; border: 1px solid #ffffff1f; }
+  .branch > .label { display: block; text-align: center; font-family: var(--display); font-weight: 600; font-size: 19px; margin-bottom: 12px; }
+  .branch.go   { background: #1f4a3d55; }
+  .branch.held { background: #4a3a1555; }
+  .forks { display: grid; gap: 12px; margin-top: 28px; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); }
+  .fork { border-radius: 12px; padding: 12px; border: 1px dashed #ffffff33; }
+  .fork > .label { display: block; text-align: center; font-weight: 600; margin-bottom: 10px; }
+  .step.ok { background: var(--go); border-color: #6fcf9f66; font-weight: 600; }
+  .step.no { background: var(--no); border-color: #ff9a9a66; font-weight: 600; }
+  .step.wait { background: var(--wait); border-color: #E2B85766; }
+  @media (min-width: 640px) {
+    .branches { grid-template-columns: 1fr 2fr; align-items: start; }
+  }
+
+  /* Tested */
+  .tested { counter-reset: t; list-style: none; padding: 0; margin: 20px 0; }
+  .tested li { counter-increment: t; position: relative; padding: 0 0 14px 48px; max-width: 58ch; }
+  .tested li::before {
+    content: counter(t); position: absolute; left: 0; top: -1px; width: 32px; height: 32px; border-radius: 50%;
+    display: grid; place-items: center; background: var(--velvet); border: 1px solid var(--gilt);
+    font-family: var(--display); font-weight: 600; font-size: 16px; color: var(--gilt);
+  }
+  .next { font-style: italic; color: var(--ivory-dim); }
+
+  /* Work with me */
+  .contact { margin: 24px 0 8px; padding: 20px; border-radius: 16px; background: linear-gradient(160deg, var(--velvet), #12163a); border: 1px solid #ffffff14; }
+  .contact dl { margin: 0; display: grid; gap: 4px 16px; grid-template-columns: max-content 1fr; }
+  .contact dt { color: var(--ivory-dim); }
+  .contact dd { margin: 0; overflow-wrap: anywhere; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 15px; line-height: 1.7; }
+  @media (max-width: 420px) {
+    .contact dl { grid-template-columns: 1fr; }
+    .contact dd { margin-bottom: 8px; }
+  }
 
   footer { margin-top: 64px; padding-top: 24px; border-top: 1px solid #ffffff22; color: var(--ivory-dim); font-size: 15px; }
-  footer p { margin: 0 0 6px; }
+  footer p { margin: 0; }
+  @media (max-width: 560px) {
+    main { padding: 0 20px 64px; }
+    header { padding-top: 48px; }
+    .road { margin-left: -20px; margin-right: -20px; }
+  }
 </style>
 </head>
 <body>
 <main>
   <header>
     <p class="clock">The clock reads <b id="clock">11:59</b> and the ball is still on.</p>
-    <h1>The slipper only fits<span>one foot.</span></h1>
-    <p class="lede">Cinderella is a policy layer for <em>threshold signing</em> on Nostr. Your nsec is split into shares. Before any share signs, it checks who's asking, what they're asking for, and whether it's past midnight.</p>
-    <div class="cta">
-      <a href="https://github.com/hasky00/cinderella">Read the code on GitHub</a>
-      <a class="quiet" href="#slipper">Try the slipper</a>
-    </div>
+    <h1>Cinderella</h1>
+    <p class="tagline">Threshold signing for Nostr, with rules and a veto.</p>
+    <p class="lede">Your Nostr key is split into shares. No single machine can sign alone. Every share checks what it is asked to sign before it helps, and the most dangerous changes wait for you first.</p>
+    <p class="status">Tested end to end in a dry run (throwaway keys, October 2026). Not yet audited. Not yet holding a real key.</p>
   </header>
 
   <div class="road" aria-hidden="true">
@@ -164,24 +252,24 @@
         <path d="M176 72 V116 M154 94 H198 M160 78 L192 110 M192 78 L160 110" stroke="#E2B857" stroke-width="2"/>
       </g>
     </svg>
-    <span class="hint">hover the carriage, it's nearly midnight</span>
+    <span class="hint"><span class="hover">hover the carriage, it's nearly midnight</span><span class="tap">tap the carriage, it's nearly midnight</span></span>
   </div>
 
   <section>
-    <h2>The ball<small>how the pieces dance</small></h2>
-    <p>FROSTR takes one Nostr key and cuts it into three shares. Any two can sign; none can alone. The signature that comes out is an ordinary Schnorr signature — relays and clients never know a whole ballroom was involved.</p>
-    <div class="shares">
-      <div class="share"><h3>Share 1 · the phone</h3><p>Always in your pocket. Signs everyday notes.</p></div>
-      <div class="share"><h3>Share 2 · the server</h3><p>Awake all night. Co-signs whatever the phone asks — if the policy agrees.</p></div>
-      <div class="share cold"><h3>Share 3 · the glass slipper</h3><p>Kept in a box. Only comes out for the serious things: your profile, your relays, deletions.</p></div>
-    </div>
+    <h2>The problem</h2>
+    <p>One nsec does everything. If it leaks, the attacker can rewrite your profile, delete your notes and become you.</p>
+    <p>FROSTR already splits a key so two of three shares must agree. But a share that agrees to anything is only a speed bump.</p>
+    <p class="verse">Cinderella makes every share look before it signs.</p>
   </section>
 
   <section>
-    <h2>The stepsisters<small>what plain FROSTR can't stop</small></h2>
-    <p>In plain FROSTR, a share is asked to sign a <em>hash</em>. It can't see what's underneath. A stolen phone plus a compliant server can rewrite your profile, swap your relay list, or delete your history — the shares never knew.</p>
-    <p class="verse">Everyone's foot can be forced into the shoe<br>if nobody looks at the foot.</p>
-    <p>Cinderella refuses blind hashes. The full event must come with the request, and each share proves it matches the hash before it looks at the kind. Then the policy decides.</p>
+    <h2>How it works</h2>
+    <ul class="cards">
+      <li><h3>Tiers per kind</h3><p>Normal notes and reactions go through; identity-changing events are held.</p></li>
+      <li><h3>Rate limits</h3><p>A sudden burst of signing is refused.</p></li>
+      <li><h3>Delay gate</h3><p>Profile, follow list and relay list changes wait 24 hours by default; deletions wait 48 hours. You choose which kinds are held.</p></li>
+    </ul>
+    <p>When something is held, the node sends an encrypted alert to your phone. You have the whole delay to say no.</p>
   </section>
 
   <section id="slipper">
@@ -204,22 +292,94 @@
   </section>
 
   <section>
-    <h2>Midnight<small>the delay gate</small></h2>
-    <p>Serious kinds don't sign right away. The first request is <em>queued</em>, and the shares agree on an unlock time. If it was really you, you wait a day and ask again. If it wasn't, a single kind 1 from any hot share turns the whole queue back into a pumpkin.</p>
-    <p>Every share runs the same rules independently. A compromised node can only vote yes — it still needs the others, and the others are looking at the foot.</p>
+    <h2>The veto: one key, one job</h2>
+    <p>The veto key does exactly one thing: it says no. It cannot sign and holds no share. If it is stolen, the worst someone can do is block a change, never make one. That is why it can live on an old phone.</p>
+
+    <div class="flow" role="group" aria-label="How a signing request flows through Cinderella">
+      <ol class="main-line">
+        <li class="step">Client<small>your Nostr app</small></li>
+        <li class="step">Gateway<small>share 1</small></li>
+        <li class="step">Share node<small>share 2</small></li>
+        <li class="step check">Policy check</li>
+      </ol>
+      <div class="branches">
+        <div class="branch go">
+          <span class="label">Not held</span>
+          <ol>
+            <li class="step">Co-sign now</li>
+            <li class="step ok">Published</li>
+          </ol>
+        </div>
+        <div class="branch held">
+          <span class="label">Held</span>
+          <ol>
+            <li class="step wait">Hold 24h / 48h</li>
+            <li class="step">Encrypted alert to your phone</li>
+          </ol>
+          <div class="forks">
+            <div class="fork">
+              <span class="label">You reply “veto”</span>
+              <ol>
+                <li class="step no">Never signed<small>shown as “vetoed”</small></li>
+              </ol>
+            </div>
+            <div class="fork">
+              <span class="label">You stay quiet</span>
+              <ol>
+                <li class="step">Delay ends</li>
+                <li class="step">Co-sign</li>
+                <li class="step ok">Published</li>
+              </ol>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
   </section>
 
   <section>
-    <h2>Run a share<small>three lines</small></h2>
-<pre><code>cp .env.example .env    # one bfshare, the bfgroup, your relays
-npm install
-npm run dev</code></pre>
-    <p>Built on <a href="https://frostr.org">FROSTR</a> and <code>@frostr/bifrost</code>. Alpha — test with a throwaway key first, always.</p>
+    <h2>What we tested</h2>
+    <p>Dry run, 2 October 2026.</p>
+    <ol class="tested">
+      <li>Changed a profile from a normal Nostr client.</li>
+      <li>The share node held it and sent an encrypted alert to an Android phone.</li>
+      <li>Replied “veto” from the phone.</li>
+      <li>The node refused to sign; the Gateway showed it as “vetoed”.</li>
+    </ol>
+    <p class="next">Next: the let-it-through path (no veto, signed after 24h).</p>
+  </section>
+
+  <section>
+    <h2>Built on</h2>
+    <ul class="cards">
+      <li><h3>FROSTR / bifrost</h3><p>Threshold Schnorr signing: the key is split into shares and never put back together.</p></li>
+      <li><h3>igloo-server</h3><p>NIP-46 remote signer, forked as the Cinderella Gateway.</p></li>
+      <li><h3>nostr-tools</h3><p>Events, encryption and relays.</p></li>
+    </ul>
+    <p>Open source. No backdoors. You keep your keys.</p>
+  </section>
+
+  <section>
+    <h2>Work with me</h2>
+    <p>I build key-safety tools for Nostr and Bitcoin, and I am open to paid work and collaboration with governments and public institutions, NGOs and civil-society groups, and projects that need people to keep control of their own keys.</p>
+    <ul class="cards">
+      <li><h3>Open source</h3><p>You can read every line.</p></li>
+      <li><h3>No backdoors</h3><p>Not for me, not for anyone.</p></li>
+      <li><h3>Users keep their keys</h3><p>I never hold them.</p></li>
+    </ul>
+    <div class="contact">
+      <h3>Contact</h3>
+      <dl>
+        <dt>Email</dt>
+        <dd>hasky.chat@pm.me</dd>
+        <dt>Nostr</dt>
+        <dd>npub1zaal69jq3qaulph9q2yy8mcxjz2wwh52zthdz4543h0kkdr6qljq8zufw0</dd>
+      </dl>
+    </div>
   </section>
 
   <footer>
-    <p>Cinderella is made by <a href="https://github.com/hasky00">hasky00</a> for the Nostr crowd. MIT.</p>
-    <p>The carriage turns back at midnight. So does anything you didn't mean to sign.</p>
+    <p>Cinderella is experimental software. Don't use it with a key you can't afford to lose until it has been reviewed.</p>
   </footer>
 </main>
 
