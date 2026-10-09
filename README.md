@@ -52,6 +52,20 @@ npm install
 npm run dev
 ```
 
+### Relay connection and supervision
+
+A share node must run under a supervisor that restarts it (launchd `KeepAlive`, systemd
+`Restart=always`, Docker `restart: unless-stopped`):
+
+- **Startup:** if the signing relay can't be reached (e.g. right after the machine wakes, before
+  the network is back), the node logs `signing relay unreachable …; retrying in N s` and retries with
+  backoff (2 s up to 60 s) instead of crashing.
+- **While running:** a watchdog sends a heartbeat on the node's own relay socket every 30 s
+  (`CINDERELLA_WATCHDOG_MS`) and checks at once after a clock jump (the machine slept). A closed or
+  silent connection never recovers by itself (bifrost's transport shuts down for good), so the node
+  logs `signing relay connection is dead (…)` and exits with code 1; the supervisor starts a fresh
+  one, which tells its peers to drop their stale nonces.
+
 ## Nonces and restarts
 
 bifrost 2 keeps nonce pools in memory only and never reconciles them after a restart, so a
@@ -193,6 +207,7 @@ npm test            # unit + e2e
 npm run test:e2e    # throwaway 2-of-3 group, real bifrost nodes, in-process relay
 npm run test:restart  # nonce resync after requester / share node restarts, refusal nonce spend
 npm run test:refusal  # refusal reasons reach the requester; lost nonces: resync + one retry; restart notice
+npm run test:watchdog # relay down at startup: retry; dead or silent connection: exit for the supervisor
 npm run test:veto     # alerts and vetoes: local relays, a test phone, offline catch-up, key rotation
 npm run test:feed     # veto feed: every relay caught up, idle timeout, backoff, rejection guard
 npm run test:startup  # node.ts refuses bad veto setups (own key as peer, node_count vs group)
